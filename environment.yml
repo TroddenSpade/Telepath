@@ -1,0 +1,11 @@
+name: dreamer
+channels:
+  - pytorch
+dependencies:
+  - plotly
+  - pytorch=1.5.0
+  - tqdm
+  - torchvision
+  - pip:
+    - gym
+    - opencv-python
