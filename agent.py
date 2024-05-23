@@ -12,6 +12,8 @@ from tqdm import tqdm
 from memory import ExperienceReplay
 from models import bottle, Encoder, ObservationModel, RewardModel, TransitionModel, ValueModel, ActorModel, PCONTModel
 
+from modules import CEM
+
 
 def cal_returns(reward, value, bootstrap, pcont, lambda_):
   """
@@ -52,6 +54,9 @@ class Dreamer():
     """
     super().__init__()
     self.args = args
+
+    self.cem = CEM(200, 512, 1/8., args.action_size)
+
     # Initialise model parameters randomly
     self.transition_model = TransitionModel(
             args.belief_size,
@@ -248,7 +253,7 @@ class Dreamer():
 
   def update_parameters(self, data, gradient_steps):
     loss_info = []  # used to record loss
-    for s in tqdm(range(gradient_steps)):
+    for s in tqdm(range(gradient_steps), leave=False):
       # get state and belief of samples
       observations, actions, rewards, nonterminals = data
 
@@ -312,6 +317,20 @@ class Dreamer():
     # finally, update target value function every #gradient_steps
     with torch.no_grad():
       self.target_value_model.load_state_dict(self.value_model.state_dict())
+
+
+    ################## CEM ###################
+
+    reconst_actions = self.cem.train(
+      beliefs.detach()[10, 0],
+      posterior_states.detach()[10, 0],
+      self.encoder(observations[:, 0]).detach()[11:],
+      10,
+      self.transition_model,
+      self.observation_model,
+      self.encoder
+    )
+    print((reconst_actions-actions[11:21, 0]).mean(1))
 
     return np.array(loss_info)
 
