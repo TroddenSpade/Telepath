@@ -55,7 +55,7 @@ class Dreamer():
     super().__init__()
     self.args = args
 
-    self.cem = CEM(200, 512, 1/8., args.action_size)
+    self.cem = CEM(10, 512, 1/8., args.action_size)
 
     # Initialise model parameters randomly
     self.transition_model = TransitionModel(
@@ -253,7 +253,7 @@ class Dreamer():
 
   def update_parameters(self, data, gradient_steps):
     loss_info = []  # used to record loss
-    for s in tqdm(range(gradient_steps), leave=False):
+    for s in tqdm(range(gradient_steps), leave=False, position=0, desc="updating parameters"):
       # get state and belief of samples
       observations, actions, rewards, nonterminals = data
 
@@ -324,11 +324,10 @@ class Dreamer():
     reconst_actions = self.cem.train(
       beliefs.detach()[10, 0],
       posterior_states.detach()[10, 0],
-      self.encoder(observations[:, 0]).detach()[11:],
+      observations[11:, 0],
       10,
       self.transition_model,
       self.observation_model,
-      self.encoder
     )
     print((reconst_actions-actions[11:21, 0]).mean(1))
 

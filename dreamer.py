@@ -14,7 +14,7 @@ parser = argparse.ArgumentParser(description='Dreamer')
 
 parser.add_argument('--seed', type=int, default=1, metavar='S', help='Random seed')
 parser.add_argument('--disable-cuda', action='store_true', help='Disable CUDA')
-parser.add_argument('--env', type=str, default='HalfCheetah-v4', choices=GYM_ENVS + CONTROL_SUITE_ENVS, help='Gym/Control Suite environment')
+parser.add_argument('--env', type=str, default='walker-walk', choices=GYM_ENVS + CONTROL_SUITE_ENVS, help='Gym/Control Suite environment')
 parser.add_argument('--symbolic', action='store_true', help='Symbolic features')
 parser.add_argument('--max-episode-length', type=int, default=1000, metavar='T', help='Max episode length')
 parser.add_argument('--experience-size', type=int, default=1000000, metavar='D', help='Experience replay size')  # Original implementation has an unlimited buffer size, but 1 million is the max experience collected anyway
@@ -131,14 +131,14 @@ if args.test:
 
   with torch.no_grad():
     total_reward = 0
-    for _ in tqdm(range(args.test_episodes)):
+    for _ in tqdm(range(args.test_episodes), leave=False, position=0, desc="testing"):
       observation = env.reset()
 
       belief = torch.zeros(1, args.belief_size, device=args.device)
       posterior_state = torch.zeros(1, args.state_size, device=args.device)
       action = torch.zeros(1, env.action_size, device=args.device)
 
-      pbar = tqdm(range(args.max_episode_length // args.action_repeat))
+      pbar = tqdm(range(args.max_episode_length // args.action_repeat), leave=False, position=0, desc="testing")
       for t in pbar:
         belief, posterior_state = agent.infer_state(observation.to(device=args.device), action, belief, posterior_state)
         action = agent.select_action((belief, posterior_state), deterministic=True)
@@ -161,7 +161,7 @@ if args.test:
 
 # Training (and testing)
 for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total=args.episodes,
-                    initial=metrics['episodes'][-1] + 1):
+                    initial=metrics['episodes'][-1] + 1, leave=False, position=0, desc="training"):
   data = D.sample(args.batch_size, args.chunk_size)
   # Model fitting
   loss_info = agent.update_parameters(data, args.collect_interval)
@@ -190,7 +190,7 @@ for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total
     posterior_state = torch.zeros(1, args.state_size, device=args.device)
     action = torch.zeros(1, env.action_size, device=args.device)
 
-    pbar = tqdm(range(args.max_episode_length // args.action_repeat))
+    pbar = tqdm(range(args.max_episode_length // args.action_repeat), position=0, leave=False, desc="collecting data")
     for t in pbar:
       # maintain belief and posterior_state
       belief, posterior_state = agent.infer_state(observation.to(device=args.device), action, belief, posterior_state)
@@ -243,7 +243,7 @@ for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total
       posterior_state = torch.zeros(args.test_episodes, args.state_size, device=args.device)
       action = torch.zeros(args.test_episodes, env.action_size, device=args.device)
 
-      for t in tqdm(range(args.max_episode_length // args.action_repeat)):
+      for t in tqdm(range(args.max_episode_length // args.action_repeat), leave=False, position=0, desc="test interval"):
         belief, posterior_state = agent.infer_state(observation.to(device=args.device), action, belief, posterior_state)
         action = agent.select_action((belief, posterior_state), deterministic=True)
         # interact with env
