@@ -113,7 +113,6 @@ class Dreamer():
     # setup the paras to update
     self.world_param = list(self.transition_model.parameters())\
                       + list(self.observation_model.parameters())\
-                      + list(self.reward_model.parameters())\
                       + list(self.encoder.parameters())
     if args.pcont:
       self.world_param += list(self.pcont_model.parameters())
@@ -122,6 +121,7 @@ class Dreamer():
     self.world_optimizer = optim.Adam(self.world_param, lr=args.world_lr)
     self.actor_optimizer = optim.Adam(self.actor_model.parameters(), lr=args.actor_lr)
     self.value_optimizer = optim.Adam(list(self.value_model.parameters()), lr=args.value_lr)
+    self.reward_optimizer = optim.Adam(list(self.reward_model.parameters()), lr=args.world_lr)
 
     # setup the free_nat
     self.free_nats = torch.full((1, ), args.free_nats, dtype=torch.float32, device=args.device)  # Allowed deviation in KL divergence
@@ -154,11 +154,6 @@ class Dreamer():
       observations,
       reduction='none').sum(dim=2 if self.args.symbolic else (2, 3, 4)).mean(dim=(0, 1))
 
-    reward_loss = F.mse_loss(
-      bottle(self.reward_model, (beliefs, posterior_states)),
-      rewards,
-      reduction='none').mean(dim=(0,1))  # TODO: 5
-
     # transition loss
     kl_loss = torch.max(
       kl_divergence(
@@ -168,7 +163,7 @@ class Dreamer():
 
     if self.args.pcont:
       pcont_loss = F.binary_cross_entropy(bottle(self.pcont_model, (beliefs, posterior_states)), nonterminals)
-    return observation_loss, self.args.reward_scale * reward_loss, kl_loss, (self.args.pcont_scale * pcont_loss if self.args.pcont else 0)
+    return observation_loss, kl_loss, (self.args.pcont_scale * pcont_loss if self.args.pcont else 0)
 
   def _compute_loss_actor(self, imag_beliefs, imag_states, imag_ac_logps=None):
     # reward and value prediction of imagined trajectories
@@ -250,6 +245,37 @@ class Dreamer():
       imag_ac_logps = torch.stack(imag_ac_logps, dim=0).to(self.args.device)  # shape [horizon, (chuck-1)*batch]
 
     return imag_beliefs, imag_states, imag_ac_logps if with_logprob else None
+  
+
+  def update_reward_model(self, beliefs, posterior_states, observations, rewards):
+    batch_size_ = 16
+    reconst_beliefs, reconst_states = [torch.empty(0)] * batch_size_, [torch.empty(0)] * batch_size_
+    for i in range(batch_size_):
+      reconst_beliefs[i], reconst_states[i] = self.cem.train(
+        beliefs.detach()[10, i],
+        posterior_states.detach()[10, i],
+        observations[11:, i],
+        10,
+        self.transition_model,
+        self.observation_model,
+      )
+
+    reconst_beliefs, reconst_states = torch.stack(reconst_beliefs, dim=1), torch.stack(reconst_states, dim=1)
+    print(reconst_states.shape, reconst_beliefs.shape)
+    print(rewards.shape)
+    loss = 0
+    for i in tqdm(range(20), leave=False, position=0, desc="reward training"):
+      reward_loss = F.mse_loss(
+        bottle(self.reward_model, (reconst_beliefs, reconst_states)),
+        rewards[11:21, :batch_size_],
+        reduction='none').mean(dim=(0,1)) * self.args.reward_scale
+      self.reward_optimizer.zero_grad()
+      reward_loss.backward()
+      self.reward_optimizer.step()
+      loss += reward_loss.item()
+
+    return loss/20.0
+
 
   def update_parameters(self, data, gradient_steps):
     loss_info = []  # used to record loss
@@ -273,9 +299,9 @@ class Dreamer():
         state=(beliefs, prior_states, prior_means, prior_std_devs, posterior_states, posterior_means, posterior_std_devs),
         data=(observations, rewards, nonterminals)
       )
-      observation_loss, reward_loss, kl_loss, pcont_loss = world_model_loss
-      self. world_optimizer.zero_grad()
-      (observation_loss + reward_loss + kl_loss + pcont_loss).backward()
+      observation_loss, kl_loss, pcont_loss = world_model_loss
+      self.world_optimizer.zero_grad()
+      (observation_loss + kl_loss + pcont_loss).backward()
       nn.utils.clip_grad_norm_(self.world_param, self.args.grad_clip_norm, norm_type=2)
       self.world_optimizer.step()
 
@@ -312,24 +338,14 @@ class Dreamer():
       nn.utils.clip_grad_norm_(self.value_model.parameters(), self.args.grad_clip_norm, norm_type=2)
       self.value_optimizer.step()
 
-      loss_info.append([observation_loss.item(), reward_loss.item(), kl_loss.item(), pcont_loss.item() if self.args.pcont else 0, actor_loss.item(), critic_loss.item()])
+      loss_info.append([observation_loss.item(), 0, kl_loss.item(), pcont_loss.item() if self.args.pcont else 0, actor_loss.item(), critic_loss.item()])
 
     # finally, update target value function every #gradient_steps
     with torch.no_grad():
       self.target_value_model.load_state_dict(self.value_model.state_dict())
 
-
-    ################## CEM ###################
-
-    reconst_actions = self.cem.train(
-      beliefs.detach()[10, 0],
-      posterior_states.detach()[10, 0],
-      observations[11:, 0],
-      10,
-      self.transition_model,
-      self.observation_model,
-    )
-    print((reconst_actions-actions[11:21, 0]).mean(1))
+    reward_loss = self.update_reward_model(beliefs, posterior_states, observations, rewards)
+    print(reward_loss)
 
     return np.array(loss_info)
 

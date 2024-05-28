@@ -39,7 +39,7 @@ class CEM(nn.Module):
             torch.ones(trajectory_length, 1, self.action_size, device=initial_beliefs.device)
         observations = observations[:trajectory_length].unsqueeze(0).repeat(self.population_size, 1, 1, 1, 1)
 
-        for iteration in tqdm(range(self.num_iterations), leave=False, position=0, desc="cem"):
+        for iteration in range(self.num_iterations):
             beliefs, states = (
                 [torch.empty(0)] * (trajectory_length+1),
                 [torch.empty(0)] * (trajectory_length+1)
@@ -109,7 +109,6 @@ class CEM(nn.Module):
         # return a
 
         best_i = torch.topk(obs_diffs, 1, largest=False).indices[0]
-        print(best_i.item())
         obs = np.clip(observations[best_i.item()].cpu().permute(0,2,3,1).numpy() + 0.5, 0, 1)
         r_obs = np.clip(reconst_observations[best_i.item()].cpu().permute(0,2,3,1).numpy() + 0.5, 0, 1)
 
@@ -120,5 +119,4 @@ class CEM(nn.Module):
         fig.savefig('./results/'+ str(time.time()) + ".png")
         plt.close()
 
-        return means.squeeze(1)
-        # return reconst_observations
+        return beliefs[best_i], states[best_i]
