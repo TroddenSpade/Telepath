@@ -279,7 +279,7 @@ class Dreamer():
 
   def update_parameters(self, data, gradient_steps):
     loss_info = []  # used to record loss
-    for s in tqdm(range(gradient_steps), leave=False, position=0, desc="updating parameters"):
+    for s in tqdm(range(1), leave=False, position=0, desc="updating parameters"):
       # get state and belief of samples
       observations, actions, rewards, nonterminals = data
 

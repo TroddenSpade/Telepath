@@ -37,7 +37,10 @@ class CEM(nn.Module):
               observation_model):
         means, stds = torch.zeros(trajectory_length, 1, self.action_size, device=initial_beliefs.device), \
             torch.ones(trajectory_length, 1, self.action_size, device=initial_beliefs.device)
-        observations = observations[:trajectory_length].unsqueeze(0).repeat(self.population_size, 1, 1, 1, 1)
+
+        observations = observations[:trajectory_length]\
+                        .unsqueeze(0).unsqueeze(0)\
+                        .expand(self.population_size, trajectory_length, -1, -1, -1, -1)
 
         for iteration in range(self.num_iterations):
             beliefs, states = (
@@ -66,15 +69,32 @@ class CEM(nn.Module):
 
             beliefs, states = torch.stack(beliefs[1:], dim=1), torch.stack(states[1:], dim=1)
             
-            reconst_observations = bottle(observation_model, (beliefs, states))
+            reconst_observations = bottle(observation_model, (beliefs, states)).unsqueeze(2).expand(-1, -1, trajectory_length, -1, -1, -1)
 
-            c_ = torch.pow(0.9, torch.arange(trajectory_length, device=initial_beliefs.device))
+            # c_ = torch.pow(0.9, torch.arange(trajectory_length, device=initial_beliefs.device))
 
-            obs_diffs = (F.mse_loss(
+            obs_diffs = F.mse_loss(
                 reconst_observations,
                 observations,
                 reduction='none'
-            ).sum(dim=(2,3,4)) * c_).mean(1)
+            ).sum(dim=(3,4,5))
+
+            diff_matrix = torch.ones(self.population_size, 
+                                     trajectory_length+1, 
+                                     trajectory_length+1, 
+                                     device=initial_beliefs.device) * float('inf')
+
+            diff_matrix[:,0,0] = 0
+            for i in range(trajectory_length):
+                for j in range(trajectory_length):
+                    diff_matrix[:, i+1, j+1] = torch.min(
+                        torch.stack([
+                            diff_matrix[:,i,j+1],
+                            diff_matrix[:,i+1,j],
+                            diff_matrix[:,i,j]], dim=0), dim=0).values + obs_diffs[:, i, j]
+
+            print(diff_matrix[0, -1, -1], obs_diffs[0].diagonal().sum())
+            exit()
 
             elite_idxs = torch.topk(obs_diffs, int(self.population_size*self.elite_fraction), largest=False).indices
 
