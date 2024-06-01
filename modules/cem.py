@@ -85,20 +85,20 @@ class CEM(nn.Module):
                                      device=initial_beliefs.device) * float('inf')
 
             diff_matrix[:,0,0] = 0
+            sum = 0
             for i in range(trajectory_length):
+                sum += obs_diffs[0, i, i]
                 for j in range(trajectory_length):
                     diff_matrix[:, i+1, j+1] = torch.min(
                         torch.stack([
                             diff_matrix[:,i,j+1],
                             diff_matrix[:,i+1,j],
                             diff_matrix[:,i,j]], dim=0), dim=0).values + obs_diffs[:, i, j]
+                    
+            dists = diff_matrix[:, -1, -1]
+            elite_idxs = torch.topk(dists, int(self.population_size*self.elite_fraction), largest=False).indices
 
-            print(diff_matrix[0, -1, -1], obs_diffs[0].diagonal().sum())
-            exit()
-
-            elite_idxs = torch.topk(obs_diffs, int(self.population_size*self.elite_fraction), largest=False).indices
-
-            elite_diffs, elite_actions = obs_diffs[elite_idxs], actions[:, elite_idxs]
+            elite_diffs, elite_actions = dists[elite_idxs], actions[:, elite_idxs]
             
             min_diff = elite_diffs.min(0)[0]
             score = torch.exp(self.temperature * (min_diff - elite_diffs))
@@ -128,11 +128,11 @@ class CEM(nn.Module):
         #     a += std * torch.randn(self.cfg.action_dim, device=std.device)
         # return a
 
-        best_i = torch.topk(obs_diffs, 1, largest=False).indices[0]
-        obs = np.clip(observations[best_i.item()].cpu().permute(0,2,3,1).numpy() + 0.5, 0, 1)
-        r_obs = np.clip(reconst_observations[best_i.item()].cpu().permute(0,2,3,1).numpy() + 0.5, 0, 1)
+        best_i = torch.topk(dists, 1, largest=False).indices[0]
+        obs = np.clip(observations[best_i.item(), 0].cpu().permute(0,2,3,1).numpy() + 0.5, 0, 1)
+        r_obs = np.clip(reconst_observations[best_i.item(), :, 0].cpu().permute(0,2,3,1).numpy() + 0.5, 0, 1)
 
-        fig, ax = plt.subplots(2, 10, figsize=(16, 4))
+        fig, ax = plt.subplots(2, trajectory_length, figsize=(16, 4))
         for i in range(trajectory_length):
             ax[0,i].imshow(obs[i])
             ax[1,i].imshow(r_obs[i])

@@ -261,8 +261,7 @@ class Dreamer():
       )
 
     reconst_beliefs, reconst_states = torch.stack(reconst_beliefs, dim=1), torch.stack(reconst_states, dim=1)
-    print(reconst_states.shape, reconst_beliefs.shape)
-    print(rewards.shape)
+
     loss = 0
     for i in tqdm(range(20), leave=False, position=0, desc="reward training"):
       reward_loss = F.mse_loss(
@@ -279,7 +278,7 @@ class Dreamer():
 
   def update_parameters(self, data, gradient_steps):
     loss_info = []  # used to record loss
-    for s in tqdm(range(1), leave=False, position=0, desc="updating parameters"):
+    for s in tqdm(range(gradient_steps), leave=False, position=0, desc="updating parameters"):
       # get state and belief of samples
       observations, actions, rewards, nonterminals = data
 
