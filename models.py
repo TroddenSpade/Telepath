@@ -123,6 +123,22 @@ def ObservationModel(symbolic, observation_size, belief_size, state_size, embedd
     return VisualObservationModel(belief_size, state_size, embedding_size, activation_function)
 
 
+
+class ApproxActionModel(nn.Module):
+  def __init__(self, embedding_size, action_size, hidden_size, activation_function='tanh'):
+    super().__init__()
+    self.act_fn = getattr(F, activation_function)
+    self.fc1 = nn.Linear(2*embedding_size, hidden_size)
+    self.fc2 = nn.Linear(hidden_size, hidden_size)
+    self.fc3 = nn.Linear(hidden_size, action_size)
+
+  def forward(self, embeddings, embeddings_2):
+    x = torch.cat([embeddings, embeddings_2],dim=1)
+    hidden = self.act_fn(self.fc1(x))
+    hidden = self.act_fn(self.fc2(hidden))
+    return self.fc3(hidden)
+
+
 class RewardModel(nn.Module):
   def __init__(self, belief_size, state_size, hidden_size, activation_function='relu'):
     super().__init__()

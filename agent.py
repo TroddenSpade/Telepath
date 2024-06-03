@@ -10,7 +10,7 @@ from torch.distributions.kl import kl_divergence
 from torch.nn import functional as F
 from tqdm import tqdm
 from memory import ExperienceReplay
-from models import bottle, Encoder, ObservationModel, RewardModel, TransitionModel, ValueModel, ActorModel, PCONTModel
+from models import ApproxActionModel, bottle, Encoder, ObservationModel, RewardModel, TransitionModel, ValueModel, ActorModel, PCONTModel
 
 from modules import CEM
 
@@ -79,6 +79,11 @@ class Dreamer():
             args.state_size,
             args.hidden_size,
             args.dense_act).to(device=args.device)
+    
+    self.approx_action = ApproxActionModel(
+            args.embedding_size,
+            args.action_size,
+            args.hidden_size).to(device=args.device)
 
     self.encoder = Encoder(
             args.symbolic,
@@ -113,6 +118,7 @@ class Dreamer():
     # setup the paras to update
     self.world_param = list(self.transition_model.parameters())\
                       + list(self.observation_model.parameters())\
+                      + list(self.approx_action.parameters())\
                       + list(self.encoder.parameters())
     if args.pcont:
       self.world_param += list(self.pcont_model.parameters())
@@ -247,51 +253,63 @@ class Dreamer():
     return imag_beliefs, imag_states, imag_ac_logps if with_logprob else None
   
 
+  # TODO rename the function
   def update_reward_model(self, beliefs, posterior_states, observations, rewards):
-    batch_size_ = 16
+    batch_size_ = beliefs.size(0)
+    horizon_ = 10
     reconst_beliefs, reconst_states = [torch.empty(0)] * batch_size_, [torch.empty(0)] * batch_size_
-    for i in range(batch_size_):
+    for i in tqdm(range(batch_size_), leave=False, position=0, desc="CEM training"):
       reconst_beliefs[i], reconst_states[i] = self.cem.train(
-        beliefs.detach()[10, i],
-        posterior_states.detach()[10, i],
-        observations[11:, i],
-        10,
+        beliefs[i],
+        posterior_states[i],
+        observations[:, i],
+        horizon_,
         self.transition_model,
         self.observation_model,
+        i == batch_size_-1
       )
 
     reconst_beliefs, reconst_states = torch.stack(reconst_beliefs, dim=1), torch.stack(reconst_states, dim=1)
 
     loss = 0
-    for i in tqdm(range(20), leave=False, position=0, desc="reward training"):
+    for i in tqdm(range(100), leave=False, position=0, desc="reward training"):
       reward_loss = F.mse_loss(
         bottle(self.reward_model, (reconst_beliefs, reconst_states)),
-        rewards[11:21, :batch_size_],
+        rewards[:horizon_, :],
         reduction='none').mean(dim=(0,1)) * self.args.reward_scale
       self.reward_optimizer.zero_grad()
       reward_loss.backward()
       self.reward_optimizer.step()
       loss += reward_loss.item()
 
-    return loss/20.0
+    return loss/100.0
 
 
-  def update_parameters(self, data, gradient_steps):
+  def update_parameters(self, data, data_2, gradient_steps):
     loss_info = []  # used to record loss
     for s in tqdm(range(gradient_steps), leave=False, position=0, desc="updating parameters"):
       # get state and belief of samples
       observations, actions, rewards, nonterminals = data
+      observations_2, actions_2, rewards_2, nonterminals_2 = data_2
 
       init_belief = torch.zeros(self.args.batch_size, self.args.belief_size, device=self.args.device)
       init_state = torch.zeros(self.args.batch_size, self.args.state_size, device=self.args.device)
 
+      embds = bottle(self.encoder, (observations, ))
       # Update belief/state using posterior from previous belief/state, previous action and current observation (over entire sequence at once)
       beliefs, prior_states, prior_means, prior_std_devs, posterior_states, posterior_means, posterior_std_devs = self.transition_model(
         init_state,
         actions,
         init_belief,
-        bottle(self.encoder, (observations, )),
+        embds,
         nonterminals)  # TODO: 4
+      
+      action_loss = F.mse_loss(
+        # bottle(self.approx_action, (embds.detach()[:-1], embds.detach()[1:])),
+        bottle(self.approx_action, (embds[:-1], embds[1:])),
+        actions[1:],
+        reduction='none'
+      ).sum(dim=2).mean(dim=(0, 1))
 
       # update paras of world model
       world_model_loss = self._compute_loss_world(
@@ -300,7 +318,7 @@ class Dreamer():
       )
       observation_loss, kl_loss, pcont_loss = world_model_loss
       self.world_optimizer.zero_grad()
-      (observation_loss + kl_loss + pcont_loss).backward()
+      (observation_loss + kl_loss + pcont_loss + action_loss * self.args.reward_scale).backward()
       nn.utils.clip_grad_norm_(self.world_param, self.args.grad_clip_norm, norm_type=2)
       self.world_optimizer.step()
 
@@ -337,13 +355,40 @@ class Dreamer():
       nn.utils.clip_grad_norm_(self.value_model.parameters(), self.args.grad_clip_norm, norm_type=2)
       self.value_optimizer.step()
 
-      loss_info.append([observation_loss.item(), 0, kl_loss.item(), pcont_loss.item() if self.args.pcont else 0, actor_loss.item(), critic_loss.item()])
+      loss_info.append([observation_loss.item(), action_loss.item(), kl_loss.item(), pcont_loss.item() if self.args.pcont else 0, actor_loss.item(), critic_loss.item()])
 
     # finally, update target value function every #gradient_steps
     with torch.no_grad():
       self.target_value_model.load_state_dict(self.value_model.state_dict())
 
-    reward_loss = self.update_reward_model(beliefs, posterior_states, observations, rewards)
+    
+    # with torch.no_grad():
+    #   initial_length = 10
+    #   embds_2 = bottle(self.encoder, (observations_2[:initial_length+1], ))
+    #   actions_2 = bottle(self.approx_action, (embds_2[:-1], embds_2[1:]))
+
+    #   init_belief = torch.zeros(self.args.batch_size, self.args.belief_size, device=self.args.device)
+    #   init_state = torch.zeros(self.args.batch_size, self.args.state_size, device=self.args.device)
+
+    #   # Update belief/state using posterior from previous belief/state, previous action and current observation (over entire sequence at once)
+    #   beliefs, _, _, _, posterior_states, _, _ = self.transition_model(
+    #     init_state,
+    #     actions_2,
+    #     init_belief,
+    #     embds_2[1:],
+    #     nonterminals_2[1:]) 
+
+    # reward_loss = self.update_reward_model(
+    #   beliefs[-1],
+    #   posterior_states[-1],
+    #   observations_2[initial_length+1:],
+    #   rewards_2[initial_length+1:])
+    reward_loss = self.update_reward_model(
+      beliefs[10].detach(),
+      posterior_states[10].detach(),
+      observations[11:21],
+      rewards[11:21])
+
     print(reward_loss)
 
     return np.array(loss_info)

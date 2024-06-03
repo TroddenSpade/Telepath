@@ -34,7 +34,8 @@ class CEM(nn.Module):
               observations, 
               trajectory_length, 
               dynamics_model, 
-              observation_model):
+              observation_model,
+              save_output=False):
         means, stds = torch.zeros(trajectory_length, 1, self.action_size, device=initial_beliefs.device), \
             torch.ones(trajectory_length, 1, self.action_size, device=initial_beliefs.device)
 
@@ -129,14 +130,15 @@ class CEM(nn.Module):
         # return a
 
         best_i = torch.topk(dists, 1, largest=False).indices[0]
-        obs = np.clip(observations[best_i.item(), 0].cpu().permute(0,2,3,1).numpy() + 0.5, 0, 1)
-        r_obs = np.clip(reconst_observations[best_i.item(), :, 0].cpu().permute(0,2,3,1).numpy() + 0.5, 0, 1)
+        if(save_output):
+            obs = np.clip(observations[best_i.item(), 0].cpu().permute(0,2,3,1).numpy() + 0.5, 0, 1)
+            r_obs = np.clip(reconst_observations[best_i.item(), :, 0].cpu().permute(0,2,3,1).numpy() + 0.5, 0, 1)
 
-        fig, ax = plt.subplots(2, trajectory_length, figsize=(16, 4))
-        for i in range(trajectory_length):
-            ax[0,i].imshow(obs[i])
-            ax[1,i].imshow(r_obs[i])
-        fig.savefig('./results/'+ str(time.time()) + ".png")
-        plt.close()
+            fig, ax = plt.subplots(2, trajectory_length, figsize=(16, 4))
+            for i in range(trajectory_length):
+                ax[0,i].imshow(obs[i])
+                ax[1,i].imshow(r_obs[i])
+            fig.savefig('./results/'+ str(time.time()) + ".png")
+            plt.close()
 
         return beliefs[best_i], states[best_i]
