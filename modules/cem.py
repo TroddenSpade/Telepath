@@ -138,7 +138,7 @@ class CEM(nn.Module):
             for i in range(trajectory_length):
                 ax[0,i].imshow(obs[i])
                 ax[1,i].imshow(r_obs[i])
-            fig.savefig('./results/'+ str(time.time()) + ".png")
+            fig.savefig('./results/N'+ str(int(time.time())%10) + ".png")
             plt.close()
 
         return beliefs[best_i], states[best_i]

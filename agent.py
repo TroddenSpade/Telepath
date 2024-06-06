@@ -255,15 +255,16 @@ class Dreamer():
 
   # TODO rename the function
   def update_reward_model(self, beliefs, posterior_states, observations, rewards):
+    horizon = 10
     batch_size_ = beliefs.size(0)
-    horizon_ = 10
     reconst_beliefs, reconst_states = [torch.empty(0)] * batch_size_, [torch.empty(0)] * batch_size_
+
     for i in tqdm(range(batch_size_), leave=False, position=0, desc="CEM training"):
       reconst_beliefs[i], reconst_states[i] = self.cem.train(
         beliefs[i],
         posterior_states[i],
         observations[:, i],
-        horizon_,
+        horizon,
         self.transition_model,
         self.observation_model,
         i == batch_size_-1
@@ -275,7 +276,7 @@ class Dreamer():
     for i in tqdm(range(100), leave=False, position=0, desc="reward training"):
       reward_loss = F.mse_loss(
         bottle(self.reward_model, (reconst_beliefs, reconst_states)),
-        rewards[:horizon_, :],
+        rewards[:horizon, :],
         reduction='none').mean(dim=(0,1)) * self.args.reward_scale
       self.reward_optimizer.zero_grad()
       reward_loss.backward()
@@ -362,32 +363,47 @@ class Dreamer():
       self.target_value_model.load_state_dict(self.value_model.state_dict())
 
     
-    # with torch.no_grad():
-    #   initial_length = 10
-    #   embds_2 = bottle(self.encoder, (observations_2[:initial_length+1], ))
-    #   actions_2 = bottle(self.approx_action, (embds_2[:-1], embds_2[1:]))
+    with torch.no_grad():
+      initial_length = 10
+      embds_2 = bottle(self.encoder, (observations[:initial_length+1], ))
+      # actions_2 = bottle(self.approx_action, (embds_2[:-1], embds_2[1:]))
+      actions_2 = actions[1:initial_length+1]
 
-    #   init_belief = torch.zeros(self.args.batch_size, self.args.belief_size, device=self.args.device)
-    #   init_state = torch.zeros(self.args.batch_size, self.args.state_size, device=self.args.device)
+      init_belief = torch.zeros(self.args.batch_size, self.args.belief_size, device=self.args.device)
+      init_state = torch.zeros(self.args.batch_size, self.args.state_size, device=self.args.device)
 
-    #   # Update belief/state using posterior from previous belief/state, previous action and current observation (over entire sequence at once)
-    #   beliefs, _, _, _, posterior_states, _, _ = self.transition_model(
-    #     init_state,
-    #     actions_2,
-    #     init_belief,
-    #     embds_2[1:],
-    #     nonterminals_2[1:]) 
+      # Update belief/state using posterior from previous belief/state, previous action and current observation (over entire sequence at once)
+      beliefs, _, _, _, posterior_states, _, _ = self.transition_model(
+        init_state,
+        actions_2,
+        init_belief,
+        embds_2[1:],
+        nonterminals_2[1:]) 
+      
+      reconst_observations = bottle(self.observation_model, (beliefs, posterior_states))
+      obs = np.clip(observations[1:initial_length+1, 0].cpu().permute(0,2,3,1).numpy() + 0.5, 0, 1)
+      r_obs = np.clip(reconst_observations[:, 0].cpu().permute(0,2,3,1).numpy() + 0.5, 0, 1)
+      import matplotlib.pyplot as plt
+      import time
+      fig, ax = plt.subplots(2, initial_length, figsize=(16, 4))
+      for i in range(initial_length):
+          ax[0,i].imshow(obs[i])
+          ax[1,i].imshow(r_obs[i])
+      fig.savefig('./results/R-'+ str(int(time.time())%10) + ".png")
+      plt.close()
 
-    # reward_loss = self.update_reward_model(
-    #   beliefs[-1],
-    #   posterior_states[-1],
-    #   observations_2[initial_length+1:],
-    #   rewards_2[initial_length+1:])
     reward_loss = self.update_reward_model(
-      beliefs[10].detach(),
-      posterior_states[10].detach(),
-      observations[11:21],
-      rewards[11:21])
+      beliefs[-1].detach(),
+      posterior_states[-1].detach(),
+      observations[initial_length+1::2],
+      rewards[initial_length+1::2])
+    
+    # TODO evaluate the outcome of this mode
+    # reward_loss = self.update_reward_model(
+    #   beliefs[10].detach(),
+    #   posterior_states[10].detach(),
+    #   observations[11:21],
+    #   rewards[11:21])
 
     print(reward_loss)
 
