@@ -122,11 +122,11 @@ class CEM(nn.Module):
             fig.savefig('./results/N'+ str(int(time.time())%10) + ".png")
             plt.close()
 
-        return beliefs[best_i], states[best_i], torch.tensor(trans_rewards, device=initial_beliefs.device)
+        return beliefs[best_i], states[best_i], trans_rewards
     
     @staticmethod
     def calc_reward(routes, rewards):
-        coefs = torch.zeros_like(routes, device=rewards.device)
+        coefs = torch.zeros_like(routes, device=rewards.device, requires_grad=False)
         pos = [routes.shape[0]-1, routes.shape[1]-1]
         path = []
         

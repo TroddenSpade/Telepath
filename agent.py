@@ -409,7 +409,7 @@ class Dreamer():
       gradient_steps,
       translated_beliefs.detach(),
       translated_states.detach(),
-      translated_rewards)
+      translated_rewards.detach())
 
     print(reward_loss)
     # exit()
