@@ -391,7 +391,9 @@ class Dreamer():
       for i in range(initial_length):
           ax[0,i].imshow(obs[i])
           ax[1,i].imshow(r_obs[i])
-      fig.savefig('./results/R-'+ str(int(time.time())%10) + ".png")
+          ax[0,i].axis("off")
+          ax[1,i].axis("off")
+      fig.savefig('./results/R-'+ str(time.time()) + ".png")
       plt.close()
 
     target_horizon = 12
@@ -412,9 +414,9 @@ class Dreamer():
       translated_rewards.detach())
 
     print(reward_loss)
-    # exit()
 
     return np.array(loss_info)
+
 
   def infer_state(self, observation, action, belief=None, state=None):
     """ Infer belief over current state q(s_t|o≤t,a<t) from the history,

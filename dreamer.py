@@ -348,7 +348,7 @@ for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total
                 'reward_model1': agent.reward_model.state_dict(),
                 'encoder': agent.encoder.state_dict(),
                 'actor_model': agent.actor_model.state_dict(),
-                'value_model1': agent.value_model.state_dict(),
+                'value_model': agent.value_model.state_dict(),
                 'world_optimizer': agent.world_optimizer.state_dict(),
                 'actor_optimizer': agent.actor_optimizer.state_dict(),
                 'value_optimizer': agent.value_optimizer.state_dict()

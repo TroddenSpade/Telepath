@@ -117,9 +117,13 @@ class CEM(nn.Module):
             fig, ax = plt.subplots(2, max(obs.shape[0], r_obs.shape[0]), figsize=(16, 4))
             for i in range(obs.shape[0]):
                 ax[0,i].imshow(obs[i])
+                ax[0,i].axis("off")
+                ax[1,i].axis("off")
             for i in range(r_obs.shape[0]):
                 ax[1,i].imshow(r_obs[i])
-            fig.savefig('./results/N'+ str(int(time.time())%10) + ".png")
+                ax[0,i].axis("off")
+                ax[1,i].axis("off")
+            fig.savefig('./results/N-'+ str(time.time()) + ".png")
             plt.close()
 
         return beliefs[best_i], states[best_i], trans_rewards
