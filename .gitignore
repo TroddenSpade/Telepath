@@ -1,2 +1,3 @@
 results
-__*
+__pycache__
+misc/

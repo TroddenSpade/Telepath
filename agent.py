@@ -10,7 +10,9 @@ from torch.distributions.kl import kl_divergence
 from torch.nn import functional as F
 from tqdm import tqdm
 from memory import ExperienceReplay
-from models import bottle, Encoder, ObservationModel, RewardModel, TransitionModel, ValueModel, ActorModel, PCONTModel
+from models import ApproxActionModel, bottle, Encoder, ObservationModel, RewardModel, TransitionModel, ValueModel, ActorModel, PCONTModel
+
+from modules import CEM
 
 
 def cal_returns(reward, value, bootstrap, pcont, lambda_):
@@ -52,6 +54,9 @@ class Dreamer():
     """
     super().__init__()
     self.args = args
+
+    self.cem = CEM(10, 512, 1/8., args.action_size)
+
     # Initialise model parameters randomly
     self.transition_model = TransitionModel(
             args.belief_size,
@@ -74,6 +79,11 @@ class Dreamer():
             args.state_size,
             args.hidden_size,
             args.dense_act).to(device=args.device)
+    
+    self.approx_action = ApproxActionModel(
+            args.embedding_size,
+            args.action_size,
+            args.hidden_size).to(device=args.device)
 
     self.encoder = Encoder(
             args.symbolic,
@@ -108,7 +118,6 @@ class Dreamer():
     # setup the paras to update
     self.world_param = list(self.transition_model.parameters())\
                       + list(self.observation_model.parameters())\
-                      + list(self.reward_model.parameters())\
                       + list(self.encoder.parameters())
     if args.pcont:
       self.world_param += list(self.pcont_model.parameters())
@@ -117,6 +126,7 @@ class Dreamer():
     self.world_optimizer = optim.Adam(self.world_param, lr=args.world_lr)
     self.actor_optimizer = optim.Adam(self.actor_model.parameters(), lr=args.actor_lr)
     self.value_optimizer = optim.Adam(list(self.value_model.parameters()), lr=args.value_lr)
+    self.reward_optimizer = optim.Adam(list(self.reward_model.parameters()), lr=args.world_lr)
 
     # setup the free_nat
     self.free_nats = torch.full((1, ), args.free_nats, dtype=torch.float32, device=args.device)  # Allowed deviation in KL divergence
@@ -149,11 +159,6 @@ class Dreamer():
       observations,
       reduction='none').sum(dim=2 if self.args.symbolic else (2, 3, 4)).mean(dim=(0, 1))
 
-    reward_loss = F.mse_loss(
-      bottle(self.reward_model, (beliefs, posterior_states)),
-      rewards,
-      reduction='none').mean(dim=(0,1))  # TODO: 5
-
     # transition loss
     kl_loss = torch.max(
       kl_divergence(
@@ -163,7 +168,7 @@ class Dreamer():
 
     if self.args.pcont:
       pcont_loss = F.binary_cross_entropy(bottle(self.pcont_model, (beliefs, posterior_states)), nonterminals)
-    return observation_loss, self.args.reward_scale * reward_loss, kl_loss, (self.args.pcont_scale * pcont_loss if self.args.pcont else 0)
+    return observation_loss, kl_loss, (self.args.pcont_scale * pcont_loss if self.args.pcont else 0)
 
   def _compute_loss_actor(self, imag_beliefs, imag_states, imag_ac_logps=None):
     # reward and value prediction of imagined trajectories
@@ -245,32 +250,81 @@ class Dreamer():
       imag_ac_logps = torch.stack(imag_ac_logps, dim=0).to(self.args.device)  # shape [horizon, (chuck-1)*batch]
 
     return imag_beliefs, imag_states, imag_ac_logps if with_logprob else None
+  
+
+  def translate_trajectory(self, init_belief, init_state, observations, rewards, source_length, target_horizon):
+    batch_size_ = init_belief.size(0)
+    translated_beliefs, translated_states, translated_rewards = [torch.empty(0)] * batch_size_,\
+                                                                [torch.empty(0)] * batch_size_,\
+                                                                [torch.empty(0)] * batch_size_
+
+    for i in tqdm(range(batch_size_), leave=False, position=0, desc="CEM training"):
+      translated_beliefs[i], translated_states[i], translated_rewards[i] = self.cem.train(
+        init_belief[i],
+        init_state[i],
+        observations[:source_length, i],
+        rewards[:source_length, i],
+        target_horizon,
+        self.transition_model,
+        self.observation_model,
+        i == batch_size_-1
+      )
+
+    translated_beliefs, translated_states, translated_rewards = torch.stack(translated_beliefs, dim=1), \
+                                            torch.stack(translated_states, dim=1), \
+                                            torch.stack(translated_rewards, dim=1)
+    return translated_beliefs, translated_states, translated_rewards
+
+
+  def update_reward_model(self, gradient_steps, translated_beliefs, translated_states, rewards):
+    loss = 0.0
+    for i in tqdm(range(gradient_steps), leave=False, position=0, desc="reward training"):
+      reward_loss = F.mse_loss(
+        bottle(self.reward_model, (translated_beliefs, translated_states)),
+        rewards,
+        reduction='none').mean(dim=(0,1)) * self.args.reward_scale
+      self.reward_optimizer.zero_grad()
+      reward_loss.backward()
+      self.reward_optimizer.step()
+      loss += reward_loss.item()
+
+    return loss/gradient_steps
+
 
   def update_parameters(self, data, gradient_steps):
     loss_info = []  # used to record loss
-    for s in tqdm(range(gradient_steps)):
+    for s in tqdm(range(gradient_steps), leave=False, position=0, desc="updating parameters"):
       # get state and belief of samples
       observations, actions, rewards, nonterminals = data
+      # observations_2, actions_2, rewards_2, nonterminals_2 = data_2
 
       init_belief = torch.zeros(self.args.batch_size, self.args.belief_size, device=self.args.device)
       init_state = torch.zeros(self.args.batch_size, self.args.state_size, device=self.args.device)
 
+      embds = bottle(self.encoder, (observations, ))
       # Update belief/state using posterior from previous belief/state, previous action and current observation (over entire sequence at once)
       beliefs, prior_states, prior_means, prior_std_devs, posterior_states, posterior_means, posterior_std_devs = self.transition_model(
         init_state,
         actions,
         init_belief,
-        bottle(self.encoder, (observations, )),
+        embds,
         nonterminals)  # TODO: 4
+      
+      # action_loss = F.mse_loss(
+      #   # bottle(self.approx_action, (embds.detach()[:-1], embds.detach()[1:])),
+      #   bottle(self.approx_action, (embds[:-1], embds[1:])),
+      #   actions[1:],
+      #   reduction='none'
+      # ).sum(dim=2).mean(dim=(0, 1))
 
       # update paras of world model
       world_model_loss = self._compute_loss_world(
         state=(beliefs, prior_states, prior_means, prior_std_devs, posterior_states, posterior_means, posterior_std_devs),
         data=(observations, rewards, nonterminals)
       )
-      observation_loss, reward_loss, kl_loss, pcont_loss = world_model_loss
-      self. world_optimizer.zero_grad()
-      (observation_loss + reward_loss + kl_loss + pcont_loss).backward()
+      observation_loss, kl_loss, pcont_loss = world_model_loss
+      self.world_optimizer.zero_grad()
+      (observation_loss + kl_loss + pcont_loss).backward()
       nn.utils.clip_grad_norm_(self.world_param, self.args.grad_clip_norm, norm_type=2)
       self.world_optimizer.step()
 
@@ -307,13 +361,62 @@ class Dreamer():
       nn.utils.clip_grad_norm_(self.value_model.parameters(), self.args.grad_clip_norm, norm_type=2)
       self.value_optimizer.step()
 
-      loss_info.append([observation_loss.item(), reward_loss.item(), kl_loss.item(), pcont_loss.item() if self.args.pcont else 0, actor_loss.item(), critic_loss.item()])
+      loss_info.append([observation_loss.item(), 0, kl_loss.item(), pcont_loss.item() if self.args.pcont else 0, actor_loss.item(), critic_loss.item()])
 
     # finally, update target value function every #gradient_steps
     with torch.no_grad():
       self.target_value_model.load_state_dict(self.value_model.state_dict())
 
+    ### Translation
+    with torch.no_grad():
+      initial_length = 10
+      embds_2 = bottle(self.encoder, (observations[:initial_length], ))
+      # actions_2 = bottle(self.approx_action, (embds_2[:-1], embds_2[1:]))
+      actions_2 = actions[:initial_length]
+
+      # Update belief/state using posterior from previous belief/state, previous action and current observation (over entire sequence at once)
+      beliefs, _, _, _, posterior_states, _, _ = self.transition_model(
+        torch.zeros(self.args.batch_size, self.args.state_size, device=self.args.device),
+        actions_2,
+        torch.zeros(self.args.batch_size, self.args.belief_size, device=self.args.device),
+        embds_2,
+        nonterminals[:initial_length])
+      
+      reconst_observations = bottle(self.observation_model, (beliefs, posterior_states))
+      obs = np.clip(observations[:initial_length, 0].cpu().permute(0,2,3,1).numpy() + 0.5, 0, 1)
+      r_obs = np.clip(reconst_observations[:, 0].cpu().permute(0,2,3,1).numpy() + 0.5, 0, 1)
+      import matplotlib.pyplot as plt
+      import time
+      fig, ax = plt.subplots(2, initial_length, figsize=(16, 4))
+      for i in range(initial_length):
+          ax[0,i].imshow(obs[i])
+          ax[1,i].imshow(r_obs[i])
+          ax[0,i].axis("off")
+          ax[1,i].axis("off")
+      fig.savefig('./results/R-'+ str(time.time()) + ".png")
+      plt.close()
+
+    target_horizon = 12
+    source_length = 6
+    translated_beliefs, translated_states, translated_rewards = self.translate_trajectory(
+      beliefs[-1].detach(),
+      posterior_states[-1].detach(),
+      observations[initial_length::2],
+      (rewards[initial_length:initial_length+target_horizon:2] + rewards[initial_length-1:initial_length+target_horizon-1:2]) / 2,
+      source_length=source_length,
+      target_horizon=target_horizon)
+      
+    # TODO evaluate the outcome of this mode
+    reward_loss = self.update_reward_model(
+      gradient_steps,
+      translated_beliefs.detach(),
+      translated_states.detach(),
+      translated_rewards.detach())
+
+    print(reward_loss)
+
     return np.array(loss_info)
+
 
   def infer_state(self, observation, action, belief=None, state=None):
     """ Infer belief over current state q(s_t|o≤t,a<t) from the history,
