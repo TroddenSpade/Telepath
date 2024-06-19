@@ -1,4 +1,5 @@
 import os
+from math import ceil
 from copy import deepcopy
 import cv2
 import numpy as np
@@ -254,25 +255,40 @@ class Dreamer():
 
   def translate_trajectory(self, init_belief, init_state, observations, rewards, source_length, target_horizon):
     batch_size_ = init_belief.size(0)
-    translated_beliefs, translated_states, translated_rewards = [torch.empty(0)] * batch_size_,\
-                                                                [torch.empty(0)] * batch_size_,\
-                                                                [torch.empty(0)] * batch_size_
 
-    for i in tqdm(range(batch_size_), leave=False, position=0, desc="CEM training"):
+    # if you have sufficient amount of VRAM
+    # translated_beliefs, translated_states, translated_rewards = self.cem.train(
+    #   init_belief,
+    #   init_state,
+    #   observations[:source_length],
+    #   rewards[:source_length],
+    #   target_horizon,
+    #   self.transition_model,
+    #   self.observation_model,
+    # )
+
+    #otherwise
+    slice_size_ = 1
+    div_size_ = ceil(batch_size_/slice_size_)
+    translated_beliefs, translated_states, translated_rewards = [torch.empty(0)] * div_size_,\
+                                                                [torch.empty(0)] * div_size_,\
+                                                                [torch.empty(0)] * div_size_
+
+    for i in tqdm(range(div_size_), leave=False, position=0, desc="CEM training"):
       translated_beliefs[i], translated_states[i], translated_rewards[i] = self.cem.train(
-        init_belief[i],
-        init_state[i],
-        observations[:source_length, i],
-        rewards[:source_length, i],
+        init_belief[slice_size_*i:slice_size_*(i+1)],
+        init_state[slice_size_*i:slice_size_*(i+1)],
+        observations[:source_length, slice_size_*i:slice_size_*(i+1)],
+        rewards[:source_length, slice_size_*i:slice_size_*(i+1)],
         target_horizon,
         self.transition_model,
         self.observation_model,
-        i == batch_size_-1
       )
 
-    translated_beliefs, translated_states, translated_rewards = torch.stack(translated_beliefs, dim=1), \
-                                            torch.stack(translated_states, dim=1), \
-                                            torch.stack(translated_rewards, dim=1)
+    translated_beliefs, translated_states, translated_rewards = torch.concat(translated_beliefs, dim=1), \
+                                            torch.concat(translated_states, dim=1), \
+                                            torch.concat(translated_rewards, dim=1)
+
     return translated_beliefs, translated_states, translated_rewards
 
 
