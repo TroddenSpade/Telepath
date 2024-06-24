@@ -123,7 +123,7 @@ class CEM(nn.Module):
                 ax[1,i].imshow(r_obs[i])
                 ax[0,i].axis("off")
                 ax[1,i].axis("off")
-            fig.savefig('./results/N-'+ str(time.time()) + ".png")
+            fig.savefig('./results/N-'+ str(int(time.time())%20) + ".png")
             plt.close()
 
         return beliefs[best_i], states[best_i], trans_rewards

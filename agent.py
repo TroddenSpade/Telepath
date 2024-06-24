@@ -393,27 +393,27 @@ class Dreamer():
           ax[1,i].imshow(r_obs[i])
           ax[0,i].axis("off")
           ax[1,i].axis("off")
-      fig.savefig('./results/R-'+ str(time.time()) + ".png")
+      fig.savefig('./results/R-'+ str(int(time.time())%20) + ".png")
       plt.close()
 
     target_horizon = 12
-    source_length = 6
+    source_length = 4
     translated_beliefs, translated_states, translated_rewards = self.translate_trajectory(
       beliefs[-1].detach(),
       posterior_states[-1].detach(),
-      observations[initial_length::2],
-      (rewards[initial_length:initial_length+target_horizon:2] + rewards[initial_length-1:initial_length+target_horizon-1:2]) / 2,
+      observations[initial_length+2::3],
+      rewards[initial_length:initial_length+target_horizon:3] + rewards[initial_length+1:initial_length+target_horizon+1:3] + rewards[initial_length+2:initial_length+target_horizon+2:3],
       source_length=source_length,
       target_horizon=target_horizon)
       
-    # TODO evaluate the outcome of this mode
     reward_loss = self.update_reward_model(
       gradient_steps,
       translated_beliefs.detach(),
       translated_states.detach(),
       translated_rewards.detach())
 
-    print(reward_loss)
+    # TODO evaluate the outcome of this mode
+    print((rewards[initial_length:initial_length+target_horizon].sum(0)-translated_rewards.detach().sum(0)).sum())
 
     return np.array(loss_info)
 
