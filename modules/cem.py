@@ -93,7 +93,7 @@ class CEM(nn.Module):
                     dim=1, keepdim=True
                     ) / (score.sum(0) + 1e-9))
 
-            _std = _std.clamp_(self.min_std, 1)
+            _std = _std.clamp(self.min_std, 2)
             means, stds = self.momentum * means + (1 - self.momentum) * _mean, _std
 
         # # Outputs

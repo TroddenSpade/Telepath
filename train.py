@@ -14,7 +14,7 @@ parser = argparse.ArgumentParser(description='Dreamer')
 
 parser.add_argument('--seed', type=int, default=1, metavar='S', help='Random seed')
 parser.add_argument('--disable-cuda', action='store_true', help='Disable CUDA')
-parser.add_argument('--env', type=str, default='HalfCheetah-v4', choices=GYM_ENVS + CONTROL_SUITE_ENVS, help='Gym/Control Suite environment')
+parser.add_argument('--env', type=str, default='walker-walk', choices=GYM_ENVS + CONTROL_SUITE_ENVS, help='Gym/Control Suite environment')
 parser.add_argument('--symbolic', action='store_true', help='Symbolic features')
 parser.add_argument('--max-episode-length', type=int, default=1000, metavar='T', help='Max episode length')
 parser.add_argument('--experience-size', type=int, default=1000000, metavar='D', help='Experience replay size')  # Original implementation has an unlimited buffer size, but 1 million is the max experience collected anyway
@@ -24,7 +24,14 @@ parser.add_argument('--embedding-size', type=int, default=1024, metavar='E', hel
 parser.add_argument('--hidden-size', type=int, default=300, metavar='H', help='Hidden size')  # paper:300; tf_implementation:400; aligned wit paper. 
 parser.add_argument('--belief-size', type=int, default=200, metavar='H', help='Belief/hidden size')
 parser.add_argument('--state-size', type=int, default=30, metavar='Z', help='State/latent size')
-parser.add_argument('--action-repeat', type=int, default=2, metavar='R', help='Action repeat')
+parser.add_argument('--action-repeat', type=int, default=1, metavar='R', help='Action repeat')
+
+parser.add_argument('--second-action-repeat', type=int, default=2, metavar='R', help='Action repeat')
+parser.add_argument('--belief-prior-range', type=int, default=10, metavar='I', help='initial range')
+parser.add_argument('--belief-prior-len', type=int, default=4, metavar='I', help='initial length to get the belief prior')
+parser.add_argument('--target-horizon', type=int, default=10, metavar='T', help='target horizon')
+parser.add_argument('--source-len', type=int, default=5, metavar='S', help='source length')
+
 parser.add_argument('--episodes', type=int, default=1000, metavar='E', help='Total number of episodes')
 parser.add_argument('--seed-episodes', type=int, default=5, metavar='S', help='Seed episodes')
 parser.add_argument('--collect-interval', type=int, default=100, metavar='C', help='Collect interval')
@@ -83,14 +90,18 @@ summary_name = results_dir + "/{}_{}_log"
 
 # Initialise training environment and experience replay memory
 env = Env(args.env, args.symbolic, args.seed, args.max_episode_length, args.action_repeat, args.bit_depth)
+env_2 = Env(args.env, args.symbolic, args.seed, args.max_episode_length, args.second_action_repeat, args.bit_depth)
 
 args.observation_size, args.action_size = env.observation_size, env.action_size
 
 # Initialise agent
-agent = Dreamer(args)
+agent = Dreamer(args, is_translation_model=True)
+agent_2 = Dreamer(args, is_translation_model=False)
 
 D = ExperienceReplay(args.experience_size, args.symbolic, env.observation_size, env.action_size, args.bit_depth,
                      args.device)
+D_2 = ExperienceReplay(args.experience_size, args.symbolic, env.observation_size, env.action_size, args.bit_depth,
+                      args.device)
 
 # Initialise dataset D with S random seed episodes
 for s in range(1, args.seed_episodes + 1):
@@ -105,19 +116,40 @@ for s in range(1, args.seed_episodes + 1):
   metrics['episodes'].append(s)
   print("(random)episodes: {}, total_env_steps: {} ".format(metrics['episodes'][-1], metrics['env_steps'][-1]))
 
+for s in range(1, args.seed_episodes + 1):
+  observation, done, t = env_2.reset(), False, 0
+  while not done:
+    action = env_2.sample_random_action()
+    next_observation, reward, done = env_2.step(action)
+    D_2.append(next_observation, action.cpu(), reward, done)  # here use the next_observation
+    observation = next_observation
+    t += 1
+  print("(actor 2)(random)episodes: {}".format(s))
+
 print("--- Finish random data collection  --- ")
 
 if args.models and os.path.exists(args.models):
   model_dicts = torch.load(args.models)
   agent.transition_model.load_state_dict(model_dicts['transition_model'])
   agent.observation_model.load_state_dict(model_dicts['observation_model'])
-  agent.reward_model.load_state_dict(model_dicts['reward_model1'])
+  agent.reward_model.load_state_dict(model_dicts['reward_model'])
   agent.encoder.load_state_dict(model_dicts['encoder'])
   agent.actor_model.load_state_dict(model_dicts['actor_model'])
   agent.value_model.load_state_dict(model_dicts['value_model'])
   agent.world_optimizer.load_state_dict(model_dicts['world_optimizer'])
   agent.actor_optimizer.load_state_dict(model_dicts['actor_optimizer'])
   agent.value_optimizer.load_state_dict(model_dicts['value_optimizer'])
+
+#reading second agent
+# model_dicts = torch.load('./misc/models_800.pth')
+# agent_2.transition_model.load_state_dict(model_dicts['transition_model'])
+# agent_2.encoder.load_state_dict(model_dicts['encoder'])
+# agent_2.actor_model.load_state_dict(model_dicts['actor_model'])
+
+# #freeze agent2 params
+# for param in (list(agent_2.actor_model.parameters())+list(agent_2.encoder.parameters())+list(agent_2.transition_model.parameters())):
+#   param.requires_grad = False
+
 
 # Testing only
 if args.test:
@@ -162,10 +194,14 @@ if args.test:
 # Training (and testing)
 for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total=args.episodes,
                     initial=metrics['episodes'][-1] + 1):
+  
   data = D.sample(args.batch_size, args.chunk_size)
+  data_2 = D_2.sample(args.batch_size, args.chunk_size)
   # Model fitting
-  loss_info = agent.update_parameters(data, args.collect_interval)
-  print(loss_info.mean(0))
+  loss_info = agent.update_parameters(data, data_2, args.collect_interval)
+  print("A1", loss_info)
+  loss_info = agent_2.update_parameters(data_2, args.collect_interval)
+  print("A2", loss_info)
 
   # # Update and plot loss metrics
   # losses = tuple(zip(*loss_info))
@@ -190,7 +226,7 @@ for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total
     posterior_state = torch.zeros(1, args.state_size, device=args.device)
     action = torch.zeros(1, env.action_size, device=args.device)
 
-    pbar = tqdm(range(args.max_episode_length // args.action_repeat))
+    pbar = tqdm(range(args.max_episode_length // args.action_repeat), leave=False, position=0)
     for t in pbar:
       # maintain belief and posterior_state
       belief, posterior_state = agent.infer_state(observation.to(device=args.device), action, belief, posterior_state)
@@ -217,6 +253,32 @@ for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total
     lineplot(metrics['episodes'][-len(metrics['train_rewards']):], metrics['train_rewards'], 'train_rewards',
              results_dir)
     print('episode', episode, 'R:', total_reward)
+
+  # Update agent2
+  with torch.no_grad():
+    observation, total_reward = env_2.reset(), 0
+    belief = torch.zeros(1, args.belief_size, device=args.device)
+    posterior_state = torch.zeros(1, args.state_size, device=args.device)
+    action = torch.zeros(1, env_2.action_size, device=args.device)
+
+    pbar = tqdm(range(args.max_episode_length // args.action_repeat), leave=False, position=0)
+    for t in pbar:
+      # maintain belief and posterior_state
+      belief, posterior_state = agent_2.infer_state(observation.to(device=args.device), action, belief, posterior_state)
+      action = agent_2.select_action((belief, posterior_state), deterministic=False)
+
+      # interact with env
+      next_observation, reward, done = env_2.step(action.cpu() if isinstance(env, EnvBatcher) else action[0].cpu())  # Perform environment step (action repeats handled internally)
+
+      # agent.D.append(observation, action.cpu(), reward, done)
+      D_2.append(next_observation, action.cpu(), reward, done)
+      total_reward += reward
+      observation = next_observation
+      if done:
+        pbar.close()
+        break
+    print('Env 2 - episode', episode, 'R:', total_reward)
+
   # Test model
   if episode % args.test_interval == 0:
     # Set models to eval mode
@@ -243,7 +305,7 @@ for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total
       posterior_state = torch.zeros(args.test_episodes, args.state_size, device=args.device)
       action = torch.zeros(args.test_episodes, env.action_size, device=args.device)
 
-      for t in tqdm(range(args.max_episode_length // args.action_repeat)):
+      for t in tqdm(range(args.max_episode_length // args.action_repeat), leave=False, position=0):
         belief, posterior_state = agent.infer_state(observation.to(device=args.device), action, belief, posterior_state)
         action = agent.select_action((belief, posterior_state), deterministic=True)
         # interact with env
@@ -284,7 +346,8 @@ for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total
     # Close test environments
     test_envs.close()
 
-  print("episodes: {}, total_env_steps: {}, train_reward: {} ".format(metrics['episodes'][-1], metrics['env_steps'][-1], metrics['train_rewards'][-1]))
+  # print("episodes: {}, total_env_steps: {}, train_reward: {} ".format(metrics['episodes'][-1], metrics['env_steps'][-1], metrics['train_rewards'][-1]))
+  print()
 
   # Checkpoint models
   if episode % args.checkpoint_interval == 0:

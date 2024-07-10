@@ -1,0 +1,33 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class LSTMBeliefPrior(nn.Module):
+    """LSTM encoder returns tanh normal distribution of latents."""
+
+    def __init__(self, embedding_size, hidden_size, belief_size, activation_function='relu', min_std_dev=0.1):
+        super().__init__()
+
+        self.act_fn = getattr(F, activation_function)  # activation function
+        self.min_std_dev = min_std_dev  # minimum standard deviation of stochastic states
+
+        self.fc_embd = nn.Linear(hidden_size, hidden_size)
+        self.fc_stoch = nn.Linear(hidden_size, 2 * belief_size)
+
+        self.lstm = nn.LSTM(embedding_size, hidden_size, 1, batch_first=False)
+        self.fc_embd = nn.Linear(hidden_size, hidden_size)
+        self.fc_stoch = nn.Linear(hidden_size, belief_size * 2)
+
+    def forward(self, input):
+        out, _ = self.lstm(input)
+        encoded = out[-1]
+        encoded = self.act_fn(self.fc_embd(encoded))
+        # Compute state prior
+        prior_means, _prior_std_dev = torch.chunk(
+            self.fc_stoch(encoded), 2, dim=1)
+        prior_std_devs = F.softplus(_prior_std_dev) + self.min_std_dev
+        prior_states = prior_means + prior_std_devs * \
+            torch.randn_like(prior_means)
+
+        return prior_means, prior_std_devs, prior_states
+    
