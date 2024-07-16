@@ -391,7 +391,7 @@ class Dreamer():
 
         kl_div = torch.max(
             kl_divergence(
-                Independent(Normal(belief_means[last_idx].detach(), belief_stds[last_idx].detach()), 1),
+                Independent(Normal(belief_means[last_idx], belief_stds[last_idx]), 1),
                 Independent(Normal(z_means, z_stds), 1)),
                 self.free_nats).mean()
         
@@ -511,7 +511,7 @@ class Dreamer():
             )
             observation_loss, kl_loss, pcont_loss = world_model_loss
             self.world_optimizer.zero_grad()
-            (observation_loss + kl_loss + pcont_loss + bp_kl_div).backward()
+            (observation_loss + kl_loss + pcont_loss + 0.1*bp_kl_div).backward()
             nn.utils.clip_grad_norm_(
                 self.world_param, self.args.grad_clip_norm, norm_type=2)
             self.world_optimizer.step()
@@ -580,7 +580,7 @@ class Dreamer():
                 observations_2,
                 rewards_2,
                 source_length=self.args.source_len,
-                target_horizon=self.args.target_horizon)
+                target_horizon=self.args.source_len)
 
             reward_loss = self.update_reward_model(
                 gradient_steps,

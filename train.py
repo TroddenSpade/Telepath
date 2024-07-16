@@ -31,7 +31,7 @@ parser.add_argument('--belief-prior-range', type=int, default=10, metavar='I', h
 parser.add_argument('--belief-prior-len', type=int, default=4, metavar='I', help='initial length to get the belief prior')
 parser.add_argument('--target-horizon', type=int, default=10, metavar='T', help='target horizon')
 parser.add_argument('--source-len', type=int, default=5, metavar='S', help='source length')
-parser.add_argument('--delay-cem', type=int, default=60, metavar='D', help='delay cem')
+parser.add_argument('--delay-cem', type=int, default=0, metavar='D', help='delay cem')
 
 parser.add_argument('--episodes', type=int, default=1000, metavar='E', help='Total number of episodes')
 parser.add_argument('--seed-episodes', type=int, default=5, metavar='S', help='Seed episodes')
@@ -91,18 +91,18 @@ summary_name = results_dir + "/{}_{}_log"
 
 # Initialise training environment and experience replay memory
 env = Env(args.env, args.symbolic, args.seed, args.max_episode_length, args.action_repeat, args.bit_depth)
-env_2 = Env(args.env, args.symbolic, args.seed, args.max_episode_length, args.second_action_repeat, args.bit_depth)
+# env_2 = Env(args.env, args.symbolic, args.seed, args.max_episode_length, args.second_action_repeat, args.bit_depth)
 
 args.observation_size, args.action_size = env.observation_size, env.action_size
 
 # Initialise agent
 agent = Dreamer(args, is_translation_model=True)
-agent_2 = Dreamer(args, is_translation_model=False)
+# agent_2 = Dreamer(args, is_translation_model=False)
 
 D = ExperienceReplay(args.experience_size, args.symbolic, env.observation_size, env.action_size, args.bit_depth,
                      args.device)
-D_2 = ExperienceReplay(args.experience_size, args.symbolic, env.observation_size, env.action_size, args.bit_depth,
-                      args.device)
+# D_2 = ExperienceReplay(args.experience_size, args.symbolic, env.observation_size, env.action_size, args.bit_depth,
+#                       args.device)
 
 # Initialise dataset D with S random seed episodes
 for s in range(1, args.seed_episodes + 1):
@@ -117,15 +117,15 @@ for s in range(1, args.seed_episodes + 1):
   metrics['episodes'].append(s)
   print("(random)episodes: {}, total_env_steps: {} ".format(metrics['episodes'][-1], metrics['env_steps'][-1]))
 
-for s in range(1, args.seed_episodes + 1):
-  observation, done, t = env_2.reset(), False, 0
-  while not done:
-    action = env_2.sample_random_action()
-    next_observation, reward, done = env_2.step(action)
-    D_2.append(next_observation, action.cpu(), reward, done)  # here use the next_observation
-    observation = next_observation
-    t += 1
-  print("(actor 2)(random)episodes: {}".format(s))
+# for s in range(1, args.seed_episodes + 1):
+#   observation, done, t = env_2.reset(), False, 0
+#   while not done:
+#     action = env_2.sample_random_action()
+#     next_observation, reward, done = env_2.step(action)
+#     D_2.append(next_observation, action.cpu(), reward, done)  # here use the next_observation
+#     observation = next_observation
+#     t += 1
+#   print("(actor 2)(random)episodes: {}".format(s))
 
 print("--- Finish random data collection  --- ")
 
@@ -197,12 +197,13 @@ for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total
                     initial=metrics['episodes'][-1] + 1):
   
   data = D.sample(args.batch_size, args.chunk_size)
-  data_2 = D_2.sample(args.batch_size, args.chunk_size)
+  # data_2 = D_2.sample(args.batch_size, args.chunk_size)
+  data_2 = D.sample(args.batch_size, args.chunk_size)
   # Model fitting
   loss_info = agent.train_fn(data, data_2, args.collect_interval, episode)
   print("A1", loss_info)
-  loss_info = agent_2.train_fn(data_2, args.collect_interval)
-  print("A2", loss_info)
+  # loss_info = agent_2.train_fn(data_2, args.collect_interval)
+  # print("A2", loss_info)
 
   # # Update and plot loss metrics
   # losses = tuple(zip(*loss_info))
@@ -254,27 +255,27 @@ for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total
     print('episode', episode, 'R:', total_reward)
 
   # Update agent2
-  with torch.no_grad():
-    observation, total_reward = env_2.reset(), 0
-    belief = torch.zeros(1, args.belief_size, device=args.device)
-    posterior_state = torch.zeros(1, args.state_size, device=args.device)
-    action = torch.zeros(1, env_2.action_size, device=args.device)
+  # with torch.no_grad():
+  #   observation, total_reward = env_2.reset(), 0
+  #   belief = torch.zeros(1, args.belief_size, device=args.device)
+  #   posterior_state = torch.zeros(1, args.state_size, device=args.device)
+  #   action = torch.zeros(1, env_2.action_size, device=args.device)
 
-    pbar = tqdm(range(args.max_episode_length // args.action_repeat), leave=False, position=0)
-    for t in pbar:
-      # maintain belief and posterior_state
-      belief, posterior_state = agent_2.infer_state(observation.to(device=args.device), action, belief, posterior_state)
-      action = agent_2.select_action((belief, posterior_state), deterministic=False)
+  #   pbar = tqdm(range(args.max_episode_length // args.action_repeat), leave=False, position=0)
+  #   for t in pbar:
+  #     # maintain belief and posterior_state
+  #     belief, posterior_state = agent_2.infer_state(observation.to(device=args.device), action, belief, posterior_state)
+  #     action = agent_2.select_action((belief, posterior_state), deterministic=False)
 
-      # interact with env
-      next_observation, reward, done = env_2.step(action.cpu() if isinstance(env, EnvBatcher) else action[0].cpu())  # Perform environment step (action repeats handled internally)
-      D_2.append(next_observation, action.cpu(), reward, done)
-      total_reward += reward
-      observation = next_observation
-      if done:
-        pbar.close()
-        break
-    print('Env 2 - episode', episode, 'R:', total_reward)
+  #     # interact with env
+  #     next_observation, reward, done = env_2.step(action.cpu() if isinstance(env, EnvBatcher) else action[0].cpu())  # Perform environment step (action repeats handled internally)
+  #     D_2.append(next_observation, action.cpu(), reward, done)
+  #     total_reward += reward
+  #     observation = next_observation
+  #     if done:
+  #       pbar.close()
+  #       break
+  #   print('Env 2 - episode', episode, 'R:', total_reward)
 
   # Test model
   if episode % args.test_interval == 0:
