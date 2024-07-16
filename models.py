@@ -57,14 +57,14 @@ class RSSM(nn.Module):
                         self.fc_belief_posterior]
 
     @jit.export
-    def _prior_state(self, prior_belief: torch.Tensor):
-        stoch_hidden = self.act_fn(self.fc_embed_belief_prior(prior_belief))
-        prior_means, _prior_std_dev = torch.chunk(
-            self.fc_state_prior(stoch_hidden), 2, dim=1)
-        prior_std_devs = F.softplus(_prior_std_dev) + self.min_std_dev
-        prior_state = prior_means + prior_std_devs * \
-            torch.randn_like(prior_means)
-        return prior_state
+    def _posterior_state(self, prior_belief: torch.Tensor, observation: torch.Tensor) -> torch.Tensor:
+        stoch_hidden = self.act_fn(self.fc_embed_belief_posterior(
+            torch.cat([prior_belief, observation], dim=1)
+        ))
+        posterior_means, _posterior_std_dev = torch.chunk(self.fc_state_posterior(stoch_hidden), 2, dim=1)
+        posterior_std_devs = F.softplus(_posterior_std_dev) + self.min_std_dev
+        posterior_state = posterior_means + posterior_std_devs * torch.randn_like(posterior_means)
+        return posterior_state
 
     def forward(self, prev_state: torch.Tensor, actions: torch.Tensor, prev_belief: torch.Tensor,
                 observations: Optional[torch.Tensor] = None, nonterminals: Optional[torch.Tensor] = None,

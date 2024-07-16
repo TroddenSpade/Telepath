@@ -38,10 +38,12 @@ class CEM(nn.Module):
               dynamics_model, 
               observation_model,
               save_output=False):
+        
+        prior_samples = initial_beliefs.size(0)
         means, stds = torch.zeros(trajectory_length, 1, self.action_size, device=initial_beliefs.device), \
             torch.ones(trajectory_length, 1, self.action_size, device=initial_beliefs.device)
 
-        observations = observations.unsqueeze(0).expand(self.population_size, -1, -1, -1, -1)
+        observations = observations.unsqueeze(0).expand(self.population_size*prior_samples, -1, -1, -1, -1)
 
         for iteration in range(self.num_iterations):
             beliefs, states = (
@@ -55,7 +57,7 @@ class CEM(nn.Module):
             actions = torch.clamp(
                 means + stds *
                 torch.randn(trajectory_length,
-                            self.population_size, 
+                            self.population_size * prior_samples, 
                             self.action_size,
                             device=initial_beliefs.device),
                 -1, 1)
@@ -123,7 +125,7 @@ class CEM(nn.Module):
                 ax[1,i].imshow(r_obs[i])
                 ax[0,i].axis("off")
                 ax[1,i].axis("off")
-            fig.savefig('./results/N-'+ str(int(time.time())%20) + ".png")
+            fig.savefig('./results/N-'+ str(int(time.time())) + ".png")
             plt.close()
 
         return beliefs[best_i], states[best_i], trans_rewards

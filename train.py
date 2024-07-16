@@ -31,6 +31,7 @@ parser.add_argument('--belief-prior-range', type=int, default=10, metavar='I', h
 parser.add_argument('--belief-prior-len', type=int, default=4, metavar='I', help='initial length to get the belief prior')
 parser.add_argument('--target-horizon', type=int, default=10, metavar='T', help='target horizon')
 parser.add_argument('--source-len', type=int, default=5, metavar='S', help='source length')
+parser.add_argument('--delay-cem', type=int, default=60, metavar='D', help='delay cem')
 
 parser.add_argument('--episodes', type=int, default=1000, metavar='E', help='Total number of episodes')
 parser.add_argument('--seed-episodes', type=int, default=5, metavar='S', help='Seed episodes')
@@ -198,9 +199,9 @@ for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total
   data = D.sample(args.batch_size, args.chunk_size)
   data_2 = D_2.sample(args.batch_size, args.chunk_size)
   # Model fitting
-  loss_info = agent.update_parameters(data, data_2, args.collect_interval)
+  loss_info = agent.train_fn(data, data_2, args.collect_interval, episode)
   print("A1", loss_info)
-  loss_info = agent_2.update_parameters(data_2, args.collect_interval)
+  loss_info = agent_2.train_fn(data_2, args.collect_interval)
   print("A2", loss_info)
 
   # # Update and plot loss metrics
@@ -234,8 +235,6 @@ for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total
 
       # interact with env
       next_observation, reward, done = env.step(action.cpu() if isinstance(env, EnvBatcher) else action[0].cpu())  # Perform environment step (action repeats handled internally)
-
-      # agent.D.append(observation, action.cpu(), reward, done)
       D.append(next_observation, action.cpu(), reward, done)
       total_reward += reward
       observation = next_observation
@@ -269,8 +268,6 @@ for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total
 
       # interact with env
       next_observation, reward, done = env_2.step(action.cpu() if isinstance(env, EnvBatcher) else action[0].cpu())  # Perform environment step (action repeats handled internally)
-
-      # agent.D.append(observation, action.cpu(), reward, done)
       D_2.append(next_observation, action.cpu(), reward, done)
       total_reward += reward
       observation = next_observation

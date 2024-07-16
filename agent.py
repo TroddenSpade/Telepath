@@ -64,7 +64,7 @@ class Dreamer():
         else:
             self.train_fn = self.update_dreamer_parameters
 
-        self.cem = CEM(10, 512, 1/8., args.action_size)
+        self.cem = CEM(10, 128, 1/8., args.action_size)
 
         self.embedding_encoder = LSTMBeliefPrior(
             args.embedding_size,
@@ -294,18 +294,26 @@ class Dreamer():
         return imag_beliefs, imag_states, imag_ac_logps if with_logprob else None
 
 
-    def translate_trajectory(self, init_belief, init_state, observations, rewards, source_length, target_horizon):
-        batch_size_ = init_belief.size(0)
+    def translate_trajectory(self, target_observations, rewards, source_length, target_horizon):
+        n_prior_samples = 10
+        batch_size_ = target_observations.size(1)
+        with torch.no_grad():
+            embeds = bottle(self.encoder, (target_observations[:self.args.belief_prior_len+1], ))
+            pb_means, pb_stds, _ = self.embedding_encoder(embeds[:-1])
+            prior_beliefs = pb_means.unsqueeze(0) + pb_stds.unsqueeze(0) * torch.randn((n_prior_samples, batch_size_, pb_means.size(1)), device=self.args.device) 
+            prior_states = self.transition_model._posterior_state(prior_beliefs.flatten(0,1), embeds[[-1]].expand(n_prior_samples, -1, -1).flatten(0,1))
+            prior_states = prior_states.view((n_prior_samples, batch_size_, -1))
+
         translated_beliefs, translated_states, translated_rewards = [torch.empty(0)] * batch_size_, \
                                                                     [torch.empty(0)] * batch_size_, \
                                                                     [torch.empty(0)] * batch_size_
 
         for i in tqdm(range(batch_size_), leave=False, position=0, desc="CEM training"):
             translated_beliefs[i], translated_states[i], translated_rewards[i] = self.cem.train(
-                init_belief[i],
-                init_state[i],
-                observations[:source_length, i],
-                rewards[:source_length, i],
+                prior_beliefs[:, i],
+                prior_states[:, i],
+                target_observations[self.args.belief_prior_len+1:source_length+self.args.belief_prior_len+1, i],
+                rewards[self.args.belief_prior_len+1:source_length+self.args.belief_prior_len+1, i],
                 target_horizon,
                 self.transition_model,
                 self.observation_model,
@@ -455,7 +463,7 @@ class Dreamer():
             nn.utils.clip_grad_norm_(self.value_model.parameters(), self.args.grad_clip_norm, norm_type=2)
             self.value_optimizer.step()
 
-            loss_info.append([observation_loss.item(), reward_loss.item(), kl_loss.item(), pcont_loss.item() if self.args.pcont else 0, actor_loss.item(), critic_loss.item(), kl_div.item()])
+            loss_info.append([observation_loss.item(), reward_loss.item(), kl_loss.item(), pcont_loss.item() if self.args.pcont else 0, actor_loss.item(), critic_loss.item()])
 
         # finally, update target value function every #gradient_steps
         with torch.no_grad():
@@ -464,7 +472,7 @@ class Dreamer():
         return np.array(loss_info).mean(0)
 
 
-    def update_telepath_parameters(self, data, data_2, gradient_steps):
+    def update_telepath_parameters(self, data, data_2, gradient_steps, global_step):
         loss_info = []  # used to record loss
 
         ###### Agent World Model Training ######
@@ -489,6 +497,7 @@ class Dreamer():
                 nonterminals,
                 belief_dist=True)  # TODO: 4
             
+            # TODO: add jointly training
             bp_kl_div = self.update_belief_prior(belief_means[:self.args.belief_prior_range], 
                                                 belief_stds[:self.args.belief_prior_range], 
                                                 embeds[:self.args.belief_prior_range])
@@ -562,52 +571,24 @@ class Dreamer():
         # del imag_beliefs, imag_states, imag_ac_logps
         # del beliefs, prior_states, prior_means, prior_std_devs, posterior_states, posterior_means, posterior_std_devs
 
-        ####### Translation #######
-        observations_2, actions_2, rewards_2, nonterminals_2 = data_2
-        r_obs = []
-
-        with torch.no_grad():
-            embeds = bottle(self.encoder, (observations_2[:self.args.belief_prior_len], ))
-            _, _, prior_belief = self.embedding_encoder(embeds)
-            prior_state = self.transition_model._prior_state(prior_belief)
-            
-            # r_obs.append(self.observation_model(prior_belief, prior_state))
-            # for i in range(4):
-            #     prior_belief, prior_state, _, _ = agent.transition_model(
-            #         prior_state,
-            #         actions[[9+i+1]],
-            #         prior_belief
-            #     )
-            # prior_belief = prior_belief.squeeze(0)
-            # prior_state = prior_state.squeeze(0)
-            # r_obs.append(agent.observation_model(prior_belief, prior_state))
-
-        # beliefs, posterior_states = self.imag_initial_states(initial_length, observations, actions, nonterminals)
-        # sampled_obs = observations[initial_length+1::2][:source_length]
-        # sampled_embds = embds[initial_length-1::2][:source_length].detach()
-        # sampled_rewards = (rewards[initial_length::2] + rewards[initial_length+1::2])[:source_length]
-        # sampled_actions = actions[initial_length+1::2][:source_length]
-        
-        translated_beliefs, translated_states, translated_rewards = self.translate_trajectory(
-            prior_belief,
-            prior_state,
-            observations_2[self.args.belief_prior_len:],
-            rewards_2[self.args.belief_prior_len:],
-            source_length=self.args.source_len,
-            target_horizon=self.args.target_horizon)
-
-        reward_loss = self.update_reward_model(
-            gradient_steps,
-            translated_beliefs.detach(),
-            translated_states.detach(),
-            translated_rewards.detach())
-        
         loss_info = np.array(loss_info).mean(0)
-        loss_info[1] = reward_loss
+        ####### Translation #######
+        if global_step > self.args.delay_cem:
+            observations_2, _, rewards_2, _ = data_2
+            
+            translated_beliefs, translated_states, translated_rewards = self.translate_trajectory(
+                observations_2,
+                rewards_2,
+                source_length=self.args.source_len,
+                target_horizon=self.args.target_horizon)
+
+            reward_loss = self.update_reward_model(
+                gradient_steps,
+                translated_beliefs.detach(),
+                translated_states.detach(),
+                translated_rewards.detach())
         
-        # with torch.no_grad():
-        #     translated_observations = bottle(self.observation_model, (translated_beliefs.detach(), translated_states.detach()))
-        #     translated_embeds = bottle(self.encoder, (translated_observations, ))
+            loss_info[1] = reward_loss
         
         return loss_info
 

@@ -11,16 +11,19 @@ class LSTMBeliefPrior(nn.Module):
         self.act_fn = getattr(F, activation_function)  # activation function
         self.min_std_dev = min_std_dev  # minimum standard deviation of stochastic states
 
-        self.fc_embd = nn.Linear(hidden_size, hidden_size)
-        self.fc_stoch = nn.Linear(hidden_size, 2 * belief_size)
-
         self.lstm = nn.LSTM(embedding_size, hidden_size, 1, batch_first=False)
+        self.fc = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(),
+            # nn.Linear(hidden_size, hidden_size),
+            # nn.ReLU()
+        )
         self.fc_embd = nn.Linear(hidden_size, hidden_size)
         self.fc_stoch = nn.Linear(hidden_size, belief_size * 2)
 
     def forward(self, input):
         out, _ = self.lstm(input)
-        encoded = out[-1]
+        encoded = self.fc(out[-1])
         encoded = self.act_fn(self.fc_embd(encoded))
         # Compute state prior
         prior_means, _prior_std_dev = torch.chunk(
@@ -30,4 +33,3 @@ class LSTMBeliefPrior(nn.Module):
             torch.randn_like(prior_means)
 
         return prior_means, prior_std_devs, prior_states
-    
