@@ -45,8 +45,7 @@ class RSSM(nn.Module):
         self.fc_state_posterior = nn.Linear(stochastic_size, 2 * state_size)
 
         self.fc_embed_belief = nn.Linear(deterministic_size, stochastic_size)
-        self.fc_belief_posterior = nn.Linear(
-            stochastic_size, 2 * deterministic_size)
+        self.fc_belief_posterior = nn.Linear(stochastic_size, 2 * deterministic_size)
 
         self.modules = [self.fc_embed_state_action,
                         self.fc_embed_belief_prior,
@@ -55,8 +54,8 @@ class RSSM(nn.Module):
                         self.fc_state_posterior,
                         self.fc_embed_belief,
                         self.fc_belief_posterior]
-
-    @jit.export
+        
+    @jit.export    
     def _posterior_state(self, prior_belief: torch.Tensor, observation: torch.Tensor) -> torch.Tensor:
         stoch_hidden = self.act_fn(self.fc_embed_belief_posterior(
             torch.cat([prior_belief, observation], dim=1)
@@ -65,95 +64,74 @@ class RSSM(nn.Module):
         posterior_std_devs = F.softplus(_posterior_std_dev) + self.min_std_dev
         posterior_state = posterior_means + posterior_std_devs * torch.randn_like(posterior_means)
         return posterior_state
-
-    def forward(self, prev_state: torch.Tensor, actions: torch.Tensor, prev_belief: torch.Tensor,
-                observations: Optional[torch.Tensor] = None, nonterminals: Optional[torch.Tensor] = None,
-                belief_dist: bool = False) -> List[torch.Tensor]:
+    
+    def forward(self, prev_state: torch.Tensor, actions: torch.Tensor, prev_belief: torch.Tensor, 
+                observations: Optional[torch.Tensor] = None, nonterminals: Optional[torch.Tensor] = None
+                ) -> List[torch.Tensor]:
         '''
         Input:	init_belief, 
-            init_state
+                init_state
         Output: beliefs,
-            prior_states, 
-            prior_means, 
-            prior_std_devs, 
-            posterior_states, 
-            posterior_means, 
-            posterior_std_devs
+                prior_states, 
+                prior_means, 
+                prior_std_devs, 
+                posterior_states, 
+                posterior_means, 
+                posterior_std_devs
         '''
-        # Create lists for hidden states
+        # Create lists for hidden states 
         # (cannot use single tensor as buffer because autograd won't work with inplace writes)
         T = actions.size(0) + 1
-        beliefs, beliefs_means, beliefs_stds, prior_states, prior_means, prior_std_devs, \
-            posterior_states, posterior_means, posterior_std_devs = (
-                [torch.empty(0)] * T,
-                [torch.empty(0)] * T,
-                [torch.empty(0)] * T,
-                [torch.empty(0)] * T,
-                [torch.empty(0)] * T,
-                [torch.empty(0)] * T,
-                [torch.empty(0)] * T,
-                [torch.empty(0)] * T,
-                [torch.empty(0)] * T
-            )
+        beliefs, prior_states, prior_means, prior_std_devs, \
+        posterior_states, posterior_means, posterior_std_devs = (
+            [torch.empty(0)] * T, 
+            [torch.empty(0)] * T, 
+            [torch.empty(0)] * T, 
+            [torch.empty(0)] * T, 
+            [torch.empty(0)] * T, 
+            [torch.empty(0)] * T, 
+            [torch.empty(0)] * T
+        )
         beliefs[0], prior_states[0], posterior_states[0] = prev_belief, prev_state, prev_state
         # Loop over time sequence
         for t in range(T - 1):
             # Select appropriate previous state
             _state = prior_states[t] if observations is None else posterior_states[t]
             # Mask if previous transition was terminal
-            _state = _state if (nonterminals is None or t ==
-                                0) else _state * nonterminals[t-1]
-
+            _state = _state if (nonterminals is None or t ==0) else _state * nonterminals[t-1]
+            
             # Compute belief (deterministic hidden state)
-            deter_hidden = self.act_fn(self.fc_embed_state_action(
-                torch.cat([_state, actions[t]], dim=1)))
-            rnn_out = self.rnn(deter_hidden, beliefs[t])
-
-            stoch_hidden = self.act_fn(self.fc_embed_belief(rnn_out))
-            beliefs_means[t+1], _std_dev = torch.chunk(
-                self.fc_belief_posterior(stoch_hidden), 2, dim=1)
-            beliefs_stds[t+1] = F.softplus(_std_dev) + self.min_std_dev
-            beliefs[t+1] = beliefs_means[t+1] + beliefs_stds[t+1] * \
-                torch.randn_like(beliefs_means[t+1])
-
+            deter_hidden = self.act_fn(self.fc_embed_state_action(torch.cat([_state, actions[t]], dim=1)))
+            beliefs[t+1] = self.rnn(deter_hidden, beliefs[t])
+            
             # Compute state prior
-            stoch_hidden = self.act_fn(self.fc_embed_belief_prior(
-                beliefs[t+1]))  # [Stochastic state model]
-            prior_means[t+1], _prior_std_dev = torch.chunk(
-                self.fc_state_prior(stoch_hidden), 2, dim=1)
+            stoch_hidden = self.act_fn(self.fc_embed_belief_prior(beliefs[t+1])) # [Stochastic state model]
+            prior_means[t+1], _prior_std_dev = torch.chunk(self.fc_state_prior(stoch_hidden), 2, dim=1)
             prior_std_devs[t+1] = F.softplus(_prior_std_dev) + self.min_std_dev
-            prior_states[t+1] = prior_means[t+1] + \
-                prior_std_devs[t+1] * torch.randn_like(prior_means[t+1])
-
+            prior_states[t+1] = prior_means[t+1] + prior_std_devs[t+1] * torch.randn_like(prior_means[t+1])
+            
             if observations is not None:
                 # Compute state posterior [Posterior state model]
                 stoch_hidden = self.act_fn(
-                    self.fc_embed_belief_posterior(
-                        torch.cat([beliefs[t+1], observations[t]], dim=1))
+                    self.fc_embed_belief_posterior(torch.cat([beliefs[t+1], observations[t]], dim=1))
                 )
                 posterior_means[t+1], _posterior_std_dev = torch.chunk(
                     self.fc_state_posterior(stoch_hidden), 2, dim=1
                 )
-                posterior_std_devs[t +
-                                   1] = F.softplus(_posterior_std_dev) + self.min_std_dev
+                posterior_std_devs[t+1] = F.softplus(_posterior_std_dev) + self.min_std_dev
                 posterior_states[t+1] = posterior_means[t+1] + \
-                    posterior_std_devs[t+1] * \
-                    torch.randn_like(posterior_means[t+1])
-
+                                        posterior_std_devs[t+1] * torch.randn_like(posterior_means[t+1])
+                
         # Return new hidden states
-        hidden = [torch.stack(beliefs[1:], dim=0),
-                  torch.stack(prior_states[1:], dim=0),
-                  torch.stack(prior_means[1:], dim=0),
+        hidden = [torch.stack(beliefs[1:], dim=0), 
+                  torch.stack(prior_states[1:], dim=0), 
+                  torch.stack(prior_means[1:], dim=0), 
                   torch.stack(prior_std_devs[1:], dim=0)]
-
+        
         if observations is not None:
-            hidden += [torch.stack(posterior_states[1:], dim=0),
-                       torch.stack(posterior_means[1:], dim=0),
+            hidden += [torch.stack(posterior_states[1:], dim=0), 
+                       torch.stack(posterior_means[1:], dim=0), 
                        torch.stack(posterior_std_devs[1:], dim=0)]
-        if belief_dist:
-            hidden += [torch.stack(beliefs_means[1:], dim=0),
-                       torch.stack(beliefs_stds[1:], dim=0)]
-
         return hidden
 
 

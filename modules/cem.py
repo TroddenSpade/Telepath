@@ -38,12 +38,10 @@ class CEM(nn.Module):
               dynamics_model, 
               observation_model,
               save_output=False):
-        
-        prior_samples = initial_beliefs.size(0)
         means, stds = torch.zeros(trajectory_length, 1, self.action_size, device=initial_beliefs.device), \
             torch.ones(trajectory_length, 1, self.action_size, device=initial_beliefs.device)
 
-        observations = observations.unsqueeze(0).expand(self.population_size*prior_samples, -1, -1, -1, -1)
+        observations = observations.unsqueeze(0).expand(self.population_size, -1, -1, -1, -1)
 
         for iteration in range(self.num_iterations):
             beliefs, states = (
@@ -57,7 +55,7 @@ class CEM(nn.Module):
             actions = torch.clamp(
                 means + stds *
                 torch.randn(trajectory_length,
-                            self.population_size * prior_samples, 
+                            self.population_size, 
                             self.action_size,
                             device=initial_beliefs.device),
                 -1, 1)
@@ -95,7 +93,7 @@ class CEM(nn.Module):
                     dim=1, keepdim=True
                     ) / (score.sum(0) + 1e-9))
 
-            _std = _std.clamp(self.min_std, 2)
+            _std = _std.clamp_(self.min_std, 1)
             means, stds = self.momentum * means + (1 - self.momentum) * _mean, _std
 
         # # Outputs

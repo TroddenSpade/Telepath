@@ -15,21 +15,20 @@ class LSTMBeliefPrior(nn.Module):
         self.fc = nn.Sequential(
             nn.Linear(hidden_size, hidden_size),
             nn.ReLU(),
-            # nn.Linear(hidden_size, hidden_size),
-            # nn.ReLU()
+            nn.Linear(hidden_size, belief_size),
         )
-        self.fc_embd = nn.Linear(hidden_size, hidden_size)
-        self.fc_stoch = nn.Linear(hidden_size, belief_size * 2)
+        # self.fc_embd = nn.Linear(hidden_size, hidden_size)
+        # self.fc_stoch = nn.Linear(hidden_size, belief_size * 2)
 
     def forward(self, input):
         out, _ = self.lstm(input)
-        encoded = self.fc(out[-1])
-        encoded = self.act_fn(self.fc_embd(encoded))
+        encoded = self.fc(out)
+        # encoded = self.act_fn(self.fc_embd(encoded))
         # Compute state prior
-        prior_means, _prior_std_dev = torch.chunk(
-            self.fc_stoch(encoded), 2, dim=1)
-        prior_std_devs = F.softplus(_prior_std_dev) + self.min_std_dev
-        prior_states = prior_means + prior_std_devs * \
-            torch.randn_like(prior_means)
-
-        return prior_means, prior_std_devs, prior_states
+        # prior_means, _prior_std_dev = torch.chunk(
+        #     self.fc_stoch(encoded), 2, dim=1)
+        # prior_std_devs = F.softplus(_prior_std_dev) + self.min_std_dev
+        # prior_states = prior_means + prior_std_devs * \
+        #     torch.randn_like(prior_means)
+        # return prior_means, prior_std_devs, prior_states
+        return encoded

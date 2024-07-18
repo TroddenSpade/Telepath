@@ -299,10 +299,8 @@ class Dreamer():
         batch_size_ = target_observations.size(1)
         with torch.no_grad():
             embeds = bottle(self.encoder, (target_observations[:self.args.belief_prior_len+1], ))
-            pb_means, pb_stds, _ = self.embedding_encoder(embeds[:-1])
-            prior_beliefs = pb_means.unsqueeze(0) + pb_stds.unsqueeze(0) * torch.randn((n_prior_samples, batch_size_, pb_means.size(1)), device=self.args.device) 
-            prior_states = self.transition_model._posterior_state(prior_beliefs.flatten(0,1), embeds[[-1]].expand(n_prior_samples, -1, -1).flatten(0,1))
-            prior_states = prior_states.view((n_prior_samples, batch_size_, -1))
+            prior_beliefs = self.embedding_encoder(embeds[:-1])[-1]
+            prior_states = self.transition_model._posterior_state(prior_beliefs, embeds[-1])
 
         translated_beliefs, translated_states, translated_rewards = [torch.empty(0)] * batch_size_, \
                                                                     [torch.empty(0)] * batch_size_, \
@@ -310,8 +308,8 @@ class Dreamer():
 
         for i in tqdm(range(batch_size_), leave=False, position=0, desc="CEM training"):
             translated_beliefs[i], translated_states[i], translated_rewards[i] = self.cem.train(
-                prior_beliefs[:, i],
-                prior_states[:, i],
+                prior_beliefs[i],
+                prior_states[i],
                 target_observations[self.args.belief_prior_len+1:source_length+self.args.belief_prior_len+1, i],
                 rewards[self.args.belief_prior_len+1:source_length+self.args.belief_prior_len+1, i],
                 target_horizon,
@@ -323,6 +321,7 @@ class Dreamer():
         translated_beliefs, translated_states, translated_rewards = torch.stack(translated_beliefs, dim=1), \
             torch.stack(translated_states, dim=1), \
             torch.stack(translated_rewards, dim=1)
+        
         return translated_beliefs, translated_states, translated_rewards
 
 
@@ -488,19 +487,15 @@ class Dreamer():
             embeds = bottle(self.encoder, (observations, ))
             # Update belief/state using posterior from previous belief/state, previous action and current observation (over entire sequence at once)
             beliefs, prior_states, prior_means, prior_std_devs,\
-                    posterior_states, posterior_means, posterior_std_devs,\
-                    belief_means, belief_stds = self.transition_model(
+                    posterior_states, posterior_means, posterior_std_devs = self.transition_model(
                 init_state,
                 actions,
                 init_belief,
                 embeds,
-                nonterminals,
-                belief_dist=True)  # TODO: 4
+                nonterminals)
             
-            # TODO: add jointly training
-            bp_kl_div = self.update_belief_prior(belief_means[:self.args.belief_prior_range], 
-                                                belief_stds[:self.args.belief_prior_range], 
-                                                embeds[:self.args.belief_prior_range])
+            pred_beliefs = self.embedding_encoder(embeds[::2])
+            beliefs_loss = F.mse_loss(beliefs[::2], pred_beliefs, reduction='none').sum(dim=1).mean()
 
             # update paras of world model
             world_model_loss = self._compute_loss_world(
@@ -511,7 +506,7 @@ class Dreamer():
             )
             observation_loss, kl_loss, pcont_loss = world_model_loss
             self.world_optimizer.zero_grad()
-            (observation_loss + kl_loss + pcont_loss + 0.1*bp_kl_div).backward()
+            (observation_loss + kl_loss + pcont_loss + beliefs_loss).backward()
             nn.utils.clip_grad_norm_(
                 self.world_param, self.args.grad_clip_norm, norm_type=2)
             self.world_optimizer.step()
@@ -561,7 +556,7 @@ class Dreamer():
                 pcont_loss.item() if self.args.pcont else 0,
                 actor_loss.item(), 
                 critic_loss.item(), 
-                bp_kl_div.item()])
+                beliefs_loss.item()])
 
         # finally, update target value function every #gradient_steps
         with torch.no_grad():
