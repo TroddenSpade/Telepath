@@ -569,8 +569,6 @@ class Dreamer():
         ####### Translation #######
         if global_step > self.args.delay_cem:
             observations_2, _, rewards_2, _ = data_2
-            observations_2 = observations_2[1::2].contiguous()
-            rewards_2 = rewards_2[::2] + rewards_2[1::2]
 
             translated_beliefs, translated_states, translated_rewards = self.translate_trajectory(
                 observations_2,
