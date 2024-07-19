@@ -64,7 +64,7 @@ class Dreamer():
         else:
             self.train_fn = self.update_dreamer_parameters
 
-        self.cem = CEM(10, 128, 1/8., args.action_size)
+        self.cem = CEM(10, 512, 1/8., args.action_size)
 
         self.embedding_encoder = LSTMBeliefPrior(
             args.embedding_size,
@@ -295,7 +295,6 @@ class Dreamer():
 
 
     def translate_trajectory(self, target_observations, rewards, source_length, target_horizon):
-        n_prior_samples = 10
         batch_size_ = target_observations.size(1)
         with torch.no_grad():
             embeds = bottle(self.encoder, (target_observations[:self.args.belief_prior_len+1], ))
@@ -570,12 +569,14 @@ class Dreamer():
         ####### Translation #######
         if global_step > self.args.delay_cem:
             observations_2, _, rewards_2, _ = data_2
-            
+            observations_2 = observations_2[1::2].contiguous()
+            rewards_2 = rewards_2[::2] + rewards_2[1::2]
+
             translated_beliefs, translated_states, translated_rewards = self.translate_trajectory(
                 observations_2,
                 rewards_2,
                 source_length=self.args.source_len,
-                target_horizon=self.args.source_len)
+                target_horizon=self.args.target_horizon)
 
             reward_loss = self.update_reward_model(
                 gradient_steps,
