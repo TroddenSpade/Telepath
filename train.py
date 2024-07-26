@@ -198,12 +198,13 @@ for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total
   
   data = D.sample(args.batch_size, args.chunk_size)
   data_2 = D_2.sample(args.batch_size, args.chunk_size)
+  # observation_2, _, reward_2, _ = D.sample(args.batch_size, args.chunk_size)
+  # data_2 = (observation_2[1::2].contiguous(), _, (reward_2[::2]+reward_2[1::2]).contiguous(), _)
   # Model fitting
   loss_info = agent.train_fn(data, data_2, args.collect_interval, episode)
   print("A1", loss_info)
-  if episode % 5 == 0:
-    loss_info = agent_2.train_fn(data_2, args.collect_interval)
-    print("A2", loss_info)
+  loss_info = agent_2.train_fn(data_2, args.collect_interval)
+  print("A2", loss_info)
 
   # Data collection
   with torch.no_grad():
@@ -245,7 +246,7 @@ for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total
     posterior_state = torch.zeros(1, args.state_size, device=args.device)
     action = torch.zeros(1, env_2.action_size, device=args.device)
 
-    pbar = tqdm(range(args.max_episode_length // args.action_repeat), leave=False, position=0)
+    pbar = tqdm(range(args.max_episode_length // args.second_action_repeat), leave=False, position=0)
     for t in pbar:
       # maintain belief and posterior_state
       belief, posterior_state = agent_2.infer_state(observation.to(device=args.device), action, belief, posterior_state)
