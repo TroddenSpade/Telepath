@@ -28,7 +28,7 @@ parser.add_argument('--action-repeat', type=int, default=1, metavar='R', help='A
 
 parser.add_argument('--second-action-repeat', type=int, default=2, metavar='R', help='Action repeat')
 parser.add_argument('--belief-prior-range', type=int, default=10, metavar='I', help='initial range')
-parser.add_argument('--belief-prior-len', type=int, default=4, metavar='I', help='initial length to get the belief prior')
+parser.add_argument('--belief-prior-len', type=int, default=8, metavar='I', help='initial length to get the belief prior')
 parser.add_argument('--target-horizon', type=int, default=10, metavar='T', help='target horizon')
 parser.add_argument('--source-len', type=int, default=5, metavar='S', help='source length')
 parser.add_argument('--delay-cem', type=int, default=0, metavar='D', help='delay cem')
@@ -198,7 +198,7 @@ for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total
   
   data = D.sample(args.batch_size, args.chunk_size)
   data_2 = D_2.sample(args.batch_size, args.chunk_size)
-  # observation_2, _, reward_2, _ = D.sample(args.batch_size, args.chunk_size)
+  # observation_2, _, reward_2, _ = D_2.sample(args.batch_size, args.chunk_size)
   # data_2 = (observation_2[1::2].contiguous(), _, (reward_2[::2]+reward_2[1::2]).contiguous(), _)
   # Model fitting
   loss_info = agent.train_fn(data, data_2, args.collect_interval, episode)

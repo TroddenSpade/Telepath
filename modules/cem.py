@@ -38,10 +38,13 @@ class CEM(nn.Module):
               dynamics_model, 
               observation_model,
               save_output=False):
+        
+        sample_size = initial_beliefs.shape[0]
         means, stds = torch.zeros(trajectory_length, 1, self.action_size, device=initial_beliefs.device), \
             torch.ones(trajectory_length, 1, self.action_size, device=initial_beliefs.device)
 
-        observations = observations.unsqueeze(0).expand(self.population_size, -1, -1, -1, -1)
+        observations = observations.unsqueeze(0).expand(self.population_size*sample_size, -1, -1, -1, -1)
+        # observations = observations.unsqueeze(0)
 
         for iteration in range(self.num_iterations):
             beliefs, states = (
@@ -51,11 +54,11 @@ class CEM(nn.Module):
 
             # sample N trajectories of length ${trajectory_length}
             beliefs[0], states[0] = initial_beliefs.repeat(self.population_size, 1),\
-                                      initial_states.repeat(self.population_size, 1)
+                                      initial_states.repeat(self.population_size, 1)            
             actions = torch.clamp(
                 means + stds *
                 torch.randn(trajectory_length,
-                            self.population_size, 
+                            self.population_size*sample_size, 
                             self.action_size,
                             device=initial_beliefs.device),
                 -1, 1)
