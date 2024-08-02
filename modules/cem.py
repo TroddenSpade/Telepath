@@ -78,7 +78,7 @@ class CEM(nn.Module):
             # c_ = torch.pow(0.9, torch.arange(trajectory_length, device=initial_beliefs.device))
             dists, directions = DTW(observations, reconst_observations)
 
-            elite_idxs = torch.topk(dists, int(self.population_size*self.elite_fraction), largest=False).indices
+            elite_idxs = torch.topk(dists, int(self.population_size*sample_size/2*self.elite_fraction), largest=False).indices
 
             elite_diffs, elite_actions = dists[elite_idxs], actions[:, elite_idxs]
             

@@ -331,6 +331,8 @@ class Dreamer():
             torch.stack(translated_states, dim=1), \
             torch.stack(translated_rewards, dim=1)
 
+        print((translated_rewards.sum(0) - rewards[self.args.belief_prior_len:source_length+self.args.belief_prior_len].sum(0)).sum())
+
         return translated_beliefs, translated_states, translated_rewards
 
 
@@ -350,39 +352,39 @@ class Dreamer():
         return loss/gradient_steps
 
 
-    def imag_initial_states(self, initial_length, observations, actions, nonterminals, plot_reconstruction=True):
-        with torch.no_grad():
-            embds_2 = bottle(self.encoder, (observations[:initial_length], ))
-            # actions_2 = bottle(self.approx_action, (embds_2[:-1], embds_2[1:]))
-            actions_2 = actions[:initial_length]
+    # def imag_initial_states(self, initial_length, observations, actions, nonterminals, plot_reconstruction=True):
+    #     with torch.no_grad():
+    #         embds_2 = bottle(self.encoder, (observations[:initial_length], ))
+    #         # actions_2 = bottle(self.approx_action, (embds_2[:-1], embds_2[1:]))
+    #         actions_2 = actions[:initial_length]
 
-            # Update belief/state using posterior from previous belief/state, previous action and current observation (over entire sequence at once)
-            beliefs, _, _, _, posterior_states, _, _ = self.transition_model(
-                torch.zeros(self.args.batch_size,
-                            self.args.state_size, device=self.args.device),
-                actions_2,
-                torch.zeros(self.args.batch_size,
-                            self.args.belief_size, device=self.args.device),
-                embds_2,
-                nonterminals[:initial_length])
+    #         # Update belief/state using posterior from previous belief/state, previous action and current observation (over entire sequence at once)
+    #         beliefs, _, _, _, posterior_states, _, _ = self.transition_model(
+    #             torch.zeros(self.args.batch_size,
+    #                         self.args.state_size, device=self.args.device),
+    #             actions_2,
+    #             torch.zeros(self.args.batch_size,
+    #                         self.args.belief_size, device=self.args.device),
+    #             embds_2,
+    #             nonterminals[:initial_length])
 
-            reconst_observations = bottle(self.observation_model, (beliefs, posterior_states))
+    #         reconst_observations = bottle(self.observation_model, (beliefs, posterior_states))
 
-        if plot_reconstruction:
-            obs = np.clip(observations[:initial_length, 0].cpu().permute(
-                0, 2, 3, 1).numpy() + 0.5, 0, 1)
-            r_obs = np.clip(reconst_observations[:, 0].cpu().permute(
-                0, 2, 3, 1).numpy() + 0.5, 0, 1)
-            fig, ax = plt.subplots(2, initial_length, figsize=(16, 4))
-            for i in range(initial_length):
-                ax[0, i].imshow(obs[i])
-                ax[1, i].imshow(r_obs[i])
-                ax[0, i].axis("off")
-                ax[1, i].axis("off")
-            fig.savefig('./results/R-' + str(int(time.time()) % 20) + ".png")
-            plt.close()
+    #     if plot_reconstruction:
+    #         obs = np.clip(observations[:initial_length, 0].cpu().permute(
+    #             0, 2, 3, 1).numpy() + 0.5, 0, 1)
+    #         r_obs = np.clip(reconst_observations[:, 0].cpu().permute(
+    #             0, 2, 3, 1).numpy() + 0.5, 0, 1)
+    #         fig, ax = plt.subplots(2, initial_length, figsize=(16, 4))
+    #         for i in range(initial_length):
+    #             ax[0, i].imshow(obs[i])
+    #             ax[1, i].imshow(r_obs[i])
+    #             ax[0, i].axis("off")
+    #             ax[1, i].axis("off")
+    #         fig.savefig('./results/R-' + str(int(time.time()) % 20) + ".png")
+    #         plt.close()
 
-        return beliefs[-1].detach(), posterior_states[-1].detach()
+    #     return beliefs[-1].detach(), posterior_states[-1].detach()
 
 
     # def update_belief_prior(self, belief_means, belief_stds, embeds):
@@ -591,7 +593,7 @@ class Dreamer():
                 translated_beliefs.detach(),
                 translated_states.detach(),
                 translated_rewards.detach())
-
+            
             loss_info[1] = reward_loss
 
         fig, ax = plt.subplots(1, 2, figsize=(2, 2))
