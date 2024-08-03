@@ -91,13 +91,13 @@ summary_name = results_dir + "/{}_{}_log"
 
 # Initialise training environment and experience replay memory
 env = Env(args.env, args.symbolic, args.seed, args.max_episode_length, args.action_repeat, args.bit_depth)
-env_2 = Env(args.env, args.symbolic, args.seed, args.max_episode_length, args.second_action_repeat, args.bit_depth)
+env_2 = Env(args.env, args.symbolic, args.seed, args.max_episode_length, args.action_repeat, args.bit_depth)
 
 args.observation_size, args.action_size = env.observation_size, env.action_size
 
 # Initialise agent
 agent = Dreamer(args, is_translation_model=True)
-agent_2 = Dreamer(args, is_translation_model=False)
+# agent_2 = Dreamer(args, is_translation_model=False)
 
 D = ExperienceReplay(args.experience_size, args.symbolic, env.observation_size, env.action_size, args.bit_depth,
                      args.device)
@@ -121,8 +121,9 @@ for s in range(1, args.seed_episodes + 1):
   observation, done, t = env_2.reset(), False, 0
   while not done:
     action = env_2.sample_random_action()
-    next_observation, reward, done = env_2.step(action)
-    D_2.append(next_observation, action.cpu(), reward, done)  # here use the next_observation
+    for _ in range(args.second_action_repeat):
+      next_observation, reward, done = env_2.step(action)
+      D_2.append(next_observation, action.cpu(), reward, done)  # here use the next_observation
     observation = next_observation
     t += 1
   print("(actor 2)(random)episodes: {}".format(s))
@@ -198,13 +199,11 @@ for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total
   
   data = D.sample(args.batch_size, args.chunk_size)
   data_2 = D_2.sample(args.batch_size, args.chunk_size)
-  # observation_2, _, reward_2, _ = D_2.sample(args.batch_size, args.chunk_size)
-  # data_2 = (observation_2[1::2].contiguous(), _, (reward_2[::2]+reward_2[1::2]).contiguous(), _)
   # Model fitting
   loss_info = agent.train_fn(data, data_2, args.collect_interval, episode)
   print("A1", loss_info)
-  loss_info = agent_2.train_fn(data_2, args.collect_interval)
-  print("A2", loss_info)
+  # loss_info = agent_2.train_fn(data_2, args.collect_interval)
+  # print("A2", loss_info)
 
   # Data collection
   with torch.no_grad():
@@ -249,13 +248,17 @@ for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total
     pbar = tqdm(range(args.max_episode_length // args.second_action_repeat), leave=False, position=0)
     for t in pbar:
       # maintain belief and posterior_state
-      belief, posterior_state = agent_2.infer_state(observation.to(device=args.device), action, belief, posterior_state)
-      action = agent_2.select_action((belief, posterior_state), deterministic=False)
+      belief, posterior_state = agent.infer_state(observation.to(device=args.device), action, belief, posterior_state)
+      action = agent.select_action((belief, posterior_state), deterministic=False)
 
       # interact with env
-      next_observation, reward, done = env_2.step(action.cpu() if isinstance(env, EnvBatcher) else action[0].cpu())  # Perform environment step (action repeats handled internally)
-      D_2.append(next_observation, action.cpu(), reward, done)
-      total_reward += reward
+      done = False
+      for _ in range(args.second_action_repeat):
+        next_observation, reward, done = env_2.step(action.cpu() if isinstance(env, EnvBatcher) else action[0].cpu())  # Perform environment step (action repeats handled internally)
+        D_2.append(next_observation, action.cpu(), reward, done)
+        total_reward += reward
+        done += done
+
       observation = next_observation
       if done:
         pbar.close()

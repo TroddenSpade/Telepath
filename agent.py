@@ -331,8 +331,6 @@ class Dreamer():
             torch.stack(translated_states, dim=1), \
             torch.stack(translated_rewards, dim=1)
 
-        print((translated_rewards.sum(0) - rewards[self.args.belief_prior_len:source_length+self.args.belief_prior_len].sum(0)).sum())
-
         return translated_beliefs, translated_states, translated_rewards
 
 
@@ -580,13 +578,16 @@ class Dreamer():
         loss_info = np.array(loss_info).mean(0)
         ####### Translation #######
         if global_step > self.args.delay_cem:
-            observations_2, _, rewards_2, _ = data_2
+            observations_2_, _, rewards_2_, _ = data_2
+            observations_2, rewards_2 = observations_2_[1::2].contiguous(), (rewards_2_[::2]+rewards_2_[1::2]).contiguous()
 
             translated_beliefs, translated_states, translated_rewards = self.translate_trajectory(
                 observations_2,
                 rewards_2,
                 source_length=self.args.source_len,
                 target_horizon=self.args.target_horizon)
+            
+            print((translated_rewards - rewards_2_[2*self.args.belief_prior_len:2*(self.args.source_len+self.args.belief_prior_len)]).sum())
 
             reward_loss = self.update_reward_model(
                 gradient_steps,
