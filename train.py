@@ -1,5 +1,6 @@
 import argparse
 import os
+import copy
 import numpy as np
 import torch
 from torch.nn import functional as F
@@ -32,6 +33,7 @@ parser.add_argument('--belief-prior-len', type=int, default=8, metavar='I', help
 parser.add_argument('--target-horizon', type=int, default=10, metavar='T', help='target horizon')
 parser.add_argument('--source-len', type=int, default=5, metavar='S', help='source length')
 parser.add_argument('--delay-cem', type=int, default=0, metavar='D', help='delay cem')
+parser.add_argument('--expl-amount-2', type=float, default=0.5, help='exploration noise')
 
 parser.add_argument('--episodes', type=int, default=1000, metavar='E', help='Total number of episodes')
 parser.add_argument('--seed-episodes', type=int, default=5, metavar='S', help='Seed episodes')
@@ -49,7 +51,7 @@ parser.add_argument('--learning-rate-schedule', type=int, default=0, metavar='α
 parser.add_argument('--adam-epsilon', type=float, default=1e-7, metavar='ε', help='Adam optimizer epsilon value') 
 # Note that original has a linear learning rate decay, but it seems unlikely that this makes a significant difference
 parser.add_argument('--grad-clip-norm', type=float, default=100.0, metavar='C', help='Gradient clipping norm')
-parser.add_argument('--expl_amount', type=float, default=0.3, help='exploration noise')
+parser.add_argument('--expl-amount', type=float, default=0.3, help='exploration noise')
 parser.add_argument('--planning-horizon', type=int, default=15, metavar='H', help='Planning horizon distance')
 parser.add_argument('--discount', type=float, default=0.99, metavar='H', help='Planning horizon distance')
 parser.add_argument('--disclam', type=float, default=0.95, metavar='H', help='discount rate to compute return')
@@ -91,13 +93,15 @@ summary_name = results_dir + "/{}_{}_log"
 
 # Initialise training environment and experience replay memory
 env = Env(args.env, args.symbolic, args.seed, args.max_episode_length, args.action_repeat, args.bit_depth)
-env_2 = Env(args.env, args.symbolic, args.seed, args.max_episode_length, args.action_repeat, args.bit_depth)
+env_2 = Env(args.env, args.symbolic, args.seed, args.max_episode_length, args.second_action_repeat, args.bit_depth)
 
 args.observation_size, args.action_size = env.observation_size, env.action_size
+args_2 = copy.deepcopy(args)
+args_2.expl_amount = args.expl_amount_2
 
 # Initialise agent
 agent = Dreamer(args, is_translation_model=True)
-# agent_2 = Dreamer(args, is_translation_model=False)
+agent_2 = Dreamer(args_2, is_translation_model=False)
 
 D = ExperienceReplay(args.experience_size, args.symbolic, env.observation_size, env.action_size, args.bit_depth,
                      args.device)
@@ -202,8 +206,9 @@ for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total
   # Model fitting
   loss_info = agent.train_fn(data, data_2, args.collect_interval, episode)
   print("A1", loss_info)
-  # loss_info = agent_2.train_fn(data_2, args.collect_interval)
-  # print("A2", loss_info)
+  if episode % 5 == 4:
+    loss_info = agent_2.train_fn(data_2, args.collect_interval)
+    print("A2", loss_info)
 
   # Data collection
   with torch.no_grad():
@@ -248,16 +253,14 @@ for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total
     pbar = tqdm(range(args.max_episode_length // args.second_action_repeat), leave=False, position=0)
     for t in pbar:
       # maintain belief and posterior_state
-      belief, posterior_state = agent.infer_state(observation.to(device=args.device), action, belief, posterior_state)
-      action = agent.select_action((belief, posterior_state), deterministic=False)
+      belief, posterior_state = agent_2.infer_state(observation.to(device=args.device), action, belief, posterior_state)
+      action = agent_2.select_action((belief, posterior_state), deterministic=False)
 
       # interact with env
-      done = False
-      for _ in range(args.second_action_repeat):
-        next_observation, reward, done = env_2.step(action.cpu() if isinstance(env, EnvBatcher) else action[0].cpu())  # Perform environment step (action repeats handled internally)
-        D_2.append(next_observation, action.cpu(), reward, done)
-        total_reward += reward
-        done += done
+      next_observation, reward, done = env_2.step(action.cpu() if isinstance(env, EnvBatcher) else action[0].cpu())  # Perform environment step (action repeats handled internally)
+      D_2.append(next_observation, action.cpu(), reward, done)
+      total_reward += reward
+      done += done
 
       observation = next_observation
       if done:

@@ -578,8 +578,8 @@ class Dreamer():
         loss_info = np.array(loss_info).mean(0)
         ####### Translation #######
         if global_step > self.args.delay_cem:
-            observations_2_, _, rewards_2_, _ = data_2
-            observations_2, rewards_2 = observations_2_[1::2].contiguous(), (rewards_2_[::2]+rewards_2_[1::2]).contiguous()
+            observations_2, _, rewards_2, _ = data_2
+            # observations_2, rewards_2 = observations_2_[1::2].contiguous(), (rewards_2_[::2]+rewards_2_[1::2]).contiguous()
 
             translated_beliefs, translated_states, translated_rewards = self.translate_trajectory(
                 observations_2,
@@ -587,7 +587,7 @@ class Dreamer():
                 source_length=self.args.source_len,
                 target_horizon=self.args.target_horizon)
             
-            print((translated_rewards - rewards_2_[2*self.args.belief_prior_len:2*(self.args.source_len+self.args.belief_prior_len)]).sum())
+            # print((translated_rewards - rewards_2_[2*self.args.belief_prior_len:2*(self.args.source_len+self.args.belief_prior_len)]).sum())
 
             reward_loss = self.update_reward_model(
                 gradient_steps,
