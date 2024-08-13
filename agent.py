@@ -1,6 +1,8 @@
 import os
 from copy import deepcopy
+import time
 import cv2
+from matplotlib import pyplot as plt
 import numpy as np
 import torch
 from torch import nn, optim
@@ -51,7 +53,7 @@ def count_vars(module):
 
 
 class Dreamer():
-    def __init__(self, args, is_translation_model=False):
+    def __init__(self, args, is_translation_model=False, wandb_run=None):
         """
         All paras are passed by args
         :param args: a dict that includes parameters
@@ -64,7 +66,7 @@ class Dreamer():
         else:
             self.train_fn = self.update_dreamer_parameters
 
-        self.cem = CEM(10, 512, 1/8., args.action_size)
+        self.cem = CEM(10, 128, 1/8., args.action_size, wandb_run=wandb_run)
 
         self.embedding_encoder = LSTMBeliefPrior(
             args.embedding_size,
@@ -132,8 +134,9 @@ class Dreamer():
         # setup the paras to update
         self.world_param = list(self.transition_model.parameters())\
             + list(self.observation_model.parameters())\
-            + list(self.encoder.parameters())\
-            + list(self.embedding_encoder.parameters())
+            + list(self.encoder.parameters())
+        if is_translation_model:
+            self.world_param += list(self.embedding_encoder.parameters())
         if args.pcont:
             self.world_param += list(self.pcont_model.parameters())
 
@@ -152,6 +155,7 @@ class Dreamer():
         # Allowed deviation in KL divergence
         self.free_nats = torch.full(
             (1, ), args.free_nats, dtype=torch.float32, device=args.device)
+        self.nll_loss = nn.GaussianNLLLoss()
 
     def process_im(self, image):
         # Resize, put channel first, convert it to a tensor, centre it to [-0.5, 0.5] and add batch dimenstion.
@@ -169,7 +173,7 @@ class Dreamer():
         preprocess_observation_(image, self.args.bit_depth)
         return image.unsqueeze(dim=0)
 
-    def _compute_loss_world(self, state, data, reward_update=False):
+    def _compute_loss_world(self, state, data):
         # unpackage data
         beliefs, prior_states, prior_means, prior_std_devs, posterior_states, posterior_means, posterior_std_devs = state
         observations, rewards, nonterminals = data
@@ -189,13 +193,13 @@ class Dreamer():
         if self.args.pcont:
             pcont_loss = F.binary_cross_entropy(
                 bottle(self.pcont_model, (beliefs, posterior_states)), nonterminals)
-            
-        if reward_update:
+
+        if rewards is not None:
             reward_loss = F.mse_loss(
                 bottle(self.reward_model, (beliefs, posterior_states)),
                 rewards,
                 reduction='none').mean(dim=(0,1))  # TODO: 5
-            return observation_loss, reward_loss, kl_loss, (self.args.pcont_scale * pcont_loss if self.args.pcont else 0)
+            return observation_loss, self.args.reward_scale * reward_loss, kl_loss, (self.args.pcont_scale * pcont_loss if self.args.pcont else 0)
         else:
             return observation_loss, kl_loss, (self.args.pcont_scale * pcont_loss if self.args.pcont else 0)
 
@@ -294,12 +298,18 @@ class Dreamer():
         return imag_beliefs, imag_states, imag_ac_logps if with_logprob else None
 
 
-    def translate_trajectory(self, target_observations, rewards, source_length, target_horizon):
+    def translate_trajectory(self, target_observations, rewards, source_length, target_horizon, global_step=None):
         batch_size_ = target_observations.size(1)
+        sample_length = 10
         with torch.no_grad():
-            embeds = bottle(self.encoder, (target_observations[:self.args.belief_prior_len+1], ))
-            prior_beliefs = self.embedding_encoder(embeds[:-1])[-1]
-            prior_states = self.transition_model._posterior_state(prior_beliefs, embeds[-1])
+            embeds = bottle(self.encoder, (target_observations[:self.args.belief_prior_len], ))
+            means_, stds_, _ = self.embedding_encoder(embeds)
+            means_, stds_ = means_[[-1]], stds_[[-1]]
+            prior_beliefs = means_ + stds_ * torch.randn((sample_length, batch_size_, self.args.belief_size), device=self.args.device)
+            prior_states = self.transition_model._posterior_state(
+                prior_beliefs.flatten(0,1), 
+                embeds[-1].repeat(sample_length, 1)
+            ).unflatten(0, (sample_length, batch_size_))
 
         translated_beliefs, translated_states, translated_rewards = [torch.empty(0)] * batch_size_, \
                                                                     [torch.empty(0)] * batch_size_, \
@@ -307,20 +317,21 @@ class Dreamer():
 
         for i in tqdm(range(batch_size_), leave=False, position=0, desc="CEM training"):
             translated_beliefs[i], translated_states[i], translated_rewards[i] = self.cem.train(
-                prior_beliefs[i],
-                prior_states[i],
-                target_observations[self.args.belief_prior_len+1:source_length+self.args.belief_prior_len+1, i],
-                rewards[self.args.belief_prior_len+1:source_length+self.args.belief_prior_len+1, i],
+                prior_beliefs[:, i],
+                prior_states[:, i],
+                target_observations[self.args.belief_prior_len:source_length+self.args.belief_prior_len, i],
+                rewards[self.args.belief_prior_len:source_length+self.args.belief_prior_len, i],
                 target_horizon,
                 self.transition_model,
                 self.observation_model,
-                i == batch_size_-1
+                i == batch_size_-1,
+                global_step
             )
 
         translated_beliefs, translated_states, translated_rewards = torch.stack(translated_beliefs, dim=1), \
             torch.stack(translated_states, dim=1), \
             torch.stack(translated_rewards, dim=1)
-        
+
         return translated_beliefs, translated_states, translated_rewards
 
 
@@ -338,63 +349,61 @@ class Dreamer():
             loss += reward_loss.item()
 
         return loss/gradient_steps
-    
 
-    def imag_initial_states(self, initial_length, observations, actions, nonterminals, plot_reconstruction=True):
-        with torch.no_grad():
-            embds_2 = bottle(self.encoder, (observations[:initial_length], ))
-            # actions_2 = bottle(self.approx_action, (embds_2[:-1], embds_2[1:]))
-            actions_2 = actions[:initial_length]
 
-            # Update belief/state using posterior from previous belief/state, previous action and current observation (over entire sequence at once)
-            beliefs, _, _, _, posterior_states, _, _ = self.transition_model(
-                torch.zeros(self.args.batch_size,
-                            self.args.state_size, device=self.args.device),
-                actions_2,
-                torch.zeros(self.args.batch_size,
-                            self.args.belief_size, device=self.args.device),
-                embds_2,
-                nonterminals[:initial_length])
+    # def imag_initial_states(self, initial_length, observations, actions, nonterminals, plot_reconstruction=True):
+    #     with torch.no_grad():
+    #         embds_2 = bottle(self.encoder, (observations[:initial_length], ))
+    #         # actions_2 = bottle(self.approx_action, (embds_2[:-1], embds_2[1:]))
+    #         actions_2 = actions[:initial_length]
 
-            reconst_observations = bottle(self.observation_model, (beliefs, posterior_states))
-        
-        if plot_reconstruction:
-            obs = np.clip(observations[:initial_length, 0].cpu().permute(
-                0, 2, 3, 1).numpy() + 0.5, 0, 1)
-            r_obs = np.clip(reconst_observations[:, 0].cpu().permute(
-                0, 2, 3, 1).numpy() + 0.5, 0, 1)
-            import matplotlib.pyplot as plt
-            import time
-            fig, ax = plt.subplots(2, initial_length, figsize=(16, 4))
-            for i in range(initial_length):
-                ax[0, i].imshow(obs[i])
-                ax[1, i].imshow(r_obs[i])
-                ax[0, i].axis("off")
-                ax[1, i].axis("off")
-            fig.savefig('./results/R-' + str(int(time.time()) % 20) + ".png")
-            plt.close()
+    #         # Update belief/state using posterior from previous belief/state, previous action and current observation (over entire sequence at once)
+    #         beliefs, _, _, _, posterior_states, _, _ = self.transition_model(
+    #             torch.zeros(self.args.batch_size,
+    #                         self.args.state_size, device=self.args.device),
+    #             actions_2,
+    #             torch.zeros(self.args.batch_size,
+    #                         self.args.belief_size, device=self.args.device),
+    #             embds_2,
+    #             nonterminals[:initial_length])
 
-        return beliefs[-1].detach(), posterior_states[-1].detach()
-    
-    
-    def update_belief_prior(self, belief_means, belief_stds, embeds):
-        last_idx = (embeds.size(0)-1)
-        rand_idxs_r = np.array([sorted(set(np.random.choice(np.arange(last_idx), self.args.belief_prior_len-1, replace=False))) for _ in range(embeds.size(1))])
-        rand_idxs_r = np.concatenate([rand_idxs_r, last_idx*np.ones((embeds.size(1), 1))], axis=1).T
-        rand_idxs_c = np.repeat(np.arange(embeds.size(1))[:, None], self.args.belief_prior_len, axis=1).T
+    #         reconst_observations = bottle(self.observation_model, (beliefs, posterior_states))
 
-        inputs = embeds[rand_idxs_r, rand_idxs_c]
+    #     if plot_reconstruction:
+    #         obs = np.clip(observations[:initial_length, 0].cpu().permute(
+    #             0, 2, 3, 1).numpy() + 0.5, 0, 1)
+    #         r_obs = np.clip(reconst_observations[:, 0].cpu().permute(
+    #             0, 2, 3, 1).numpy() + 0.5, 0, 1)
+    #         fig, ax = plt.subplots(2, initial_length, figsize=(16, 4))
+    #         for i in range(initial_length):
+    #             ax[0, i].imshow(obs[i])
+    #             ax[1, i].imshow(r_obs[i])
+    #             ax[0, i].axis("off")
+    #             ax[1, i].axis("off")
+    #         fig.savefig('./results/R-' + str(int(time.time()) % 20) + ".png")
+    #         plt.close()
 
-        z_means, z_stds, z = self.embedding_encoder(inputs.detach())
+    #     return beliefs[-1].detach(), posterior_states[-1].detach()
 
-        kl_div = torch.max(
-            kl_divergence(
-                Independent(Normal(belief_means[last_idx], belief_stds[last_idx]), 1),
-                Independent(Normal(z_means, z_stds), 1)),
-                self.free_nats).mean()
-        
-        return kl_div
-    
+
+    # def update_belief_prior(self, belief_means, belief_stds, embeds):
+    #     last_idx = (embeds.size(0)-1)
+    #     rand_idxs_r = np.array([sorted(set(np.random.choice(np.arange(last_idx), self.args.belief_prior_len-1, replace=False))) for _ in range(embeds.size(1))])
+    #     rand_idxs_r = np.concatenate([rand_idxs_r, last_idx*np.ones((embeds.size(1), 1))], axis=1).T
+    #     rand_idxs_c = np.repeat(np.arange(embeds.size(1))[:, None], self.args.belief_prior_len, axis=1).T
+
+    #     inputs = embeds[rand_idxs_r, rand_idxs_c]
+
+    #     z_means, z_stds, z = self.embedding_encoder(inputs.detach())
+
+    #     kl_div = torch.max(
+    #         kl_divergence(
+    #             Independent(Normal(belief_means[last_idx], belief_stds[last_idx]), 1),
+    #             Independent(Normal(z_means, z_stds), 1)),
+    #             self.free_nats).mean()
+
+    #     return kl_div
+
 
     def update_dreamer_parameters(self, data, gradient_steps):
         loss_info = []  # used to record loss
@@ -406,24 +415,21 @@ class Dreamer():
             init_belief = torch.zeros(self.args.batch_size, self.args.belief_size, device=self.args.device)
             init_state = torch.zeros(self.args.batch_size, self.args.state_size, device=self.args.device)
 
-            embeds = bottle(self.encoder, (observations, ))
             # Update belief/state using posterior from previous belief/state, previous action and current observation (over entire sequence at once)
-            beliefs, prior_states, prior_means, prior_std_devs,\
-                    posterior_states, posterior_means, posterior_std_devs = self.transition_model(
+            beliefs, prior_states, prior_means, prior_std_devs, posterior_states, posterior_means, posterior_std_devs = self.transition_model(
                 init_state,
                 actions,
                 init_belief,
-                embeds,
+                bottle(self.encoder, (observations, )),
                 nonterminals)  # TODO: 4
 
             # update paras of world model
             world_model_loss = self._compute_loss_world(
                 state=(beliefs, prior_states, prior_means, prior_std_devs, posterior_states, posterior_means, posterior_std_devs),
-                data=(observations, rewards, nonterminals),
-                reward_update=True
+                data=(observations, rewards, nonterminals)
             )
             observation_loss, reward_loss, kl_loss, pcont_loss = world_model_loss
-            self.world_optimizer.zero_grad()
+            self. world_optimizer.zero_grad()
             (observation_loss + reward_loss + kl_loss + pcont_loss).backward()
             nn.utils.clip_grad_norm_(self.world_param, self.args.grad_clip_norm, norm_type=2)
             self.world_optimizer.step()
@@ -476,7 +482,7 @@ class Dreamer():
         ###### Agent World Model Training ######
         for s in tqdm(range(gradient_steps), leave=False, position=0, desc="updating parameters"):
             # get state and belief of samples
-            observations, actions, rewards, nonterminals = data
+            observations, actions, _, nonterminals = data
 
             init_belief = torch.zeros(
                 self.args.batch_size, self.args.belief_size, device=self.args.device)
@@ -492,16 +498,21 @@ class Dreamer():
                 init_belief,
                 embeds,
                 nonterminals)
-            
-            pred_beliefs = self.embedding_encoder(embeds[::2])
-            beliefs_loss = F.mse_loss(beliefs[::2], pred_beliefs, reduction='none').sum(dim=1).mean()
+
+            max_skip = 3
+            beliefs_loss = 0
+            for _ in range(max_skip):
+                idxs = np.cumsum(np.random.randint(1, max_skip+1, size=self.args.chunk_size))
+                idxs = idxs[np.where(idxs<self.args.chunk_size)[0]]
+
+                means_, stds_, z = self.embedding_encoder(embeds[idxs])
+                beliefs_loss += self.nll_loss(beliefs[idxs], means_, stds_)
 
             # update paras of world model
             world_model_loss = self._compute_loss_world(
                 state=(beliefs, prior_states, prior_means, prior_std_devs,
                        posterior_states, posterior_means, posterior_std_devs),
-                data=(observations, rewards, nonterminals),
-                reward_update=False
+                data=(observations, None, nonterminals)
             )
             observation_loss, kl_loss, pcont_loss = world_model_loss
             self.world_optimizer.zero_grad()
@@ -549,19 +560,19 @@ class Dreamer():
             self.value_optimizer.step()
 
             loss_info.append([
-                observation_loss.item(), 
-                0, 
-                kl_loss.item(), 
+                observation_loss.item(),
+                0,
+                kl_loss.item(),
                 pcont_loss.item() if self.args.pcont else 0,
-                actor_loss.item(), 
-                critic_loss.item(), 
+                actor_loss.item(),
+                critic_loss.item(),
                 beliefs_loss.item()])
 
         # finally, update target value function every #gradient_steps
         with torch.no_grad():
             self.target_value_model.load_state_dict(
                 self.value_model.state_dict())
-            
+
         # del imag_beliefs, imag_states, imag_ac_logps
         # del beliefs, prior_states, prior_means, prior_std_devs, posterior_states, posterior_means, posterior_std_devs
 
@@ -569,23 +580,31 @@ class Dreamer():
         ####### Translation #######
         if global_step > self.args.delay_cem:
             observations_2, _, rewards_2, _ = data_2
-            observations_2 = observations_2[1::2].contiguous()
-            rewards_2 = rewards_2[::2] + rewards_2[1::2]
+            # observations_2, rewards_2 = observations_2_[1::2].contiguous(), (rewards_2_[::2]+rewards_2_[1::2]).contiguous()
 
             translated_beliefs, translated_states, translated_rewards = self.translate_trajectory(
                 observations_2,
                 rewards_2,
                 source_length=self.args.source_len,
-                target_horizon=self.args.target_horizon)
+                target_horizon=self.args.target_horizon,
+                global_step=global_step)
+            
+            # print((translated_rewards - rewards_2_[2*self.args.belief_prior_len:2*(self.args.source_len+self.args.belief_prior_len)]).sum())
 
             reward_loss = self.update_reward_model(
                 gradient_steps,
                 translated_beliefs.detach(),
                 translated_states.detach(),
                 translated_rewards.detach())
-        
+            
             loss_info[1] = reward_loss
-        
+
+        fig, ax = plt.subplots(1, 2, figsize=(2, 2))
+        ax[0].imshow(observations[0, 0].permute(1, 2, 0).cpu().numpy()+0.5)
+        ax[1].imshow(observations_2[0, 0].permute(1, 2, 0).cpu().numpy()+0.5)
+        fig.savefig('./results/' + str(int(time.time()) % 5) + ".png")
+        plt.close()
+
         return loss_info
 
 

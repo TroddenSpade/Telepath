@@ -17,18 +17,21 @@ class LSTMBeliefPrior(nn.Module):
             nn.ReLU(),
             nn.Linear(hidden_size, belief_size),
         )
-        # self.fc_embd = nn.Linear(hidden_size, hidden_size)
-        # self.fc_stoch = nn.Linear(hidden_size, belief_size * 2)
+        self.fc_embd = nn.Linear(belief_size, belief_size)
+        self.fc_stoch = nn.Linear(belief_size, belief_size * 2)
 
     def forward(self, input):
         out, _ = self.lstm(input)
-        encoded = self.fc(out)
+        # encoded = self.fc(out)
+        encoded = self.act_fn(self.fc(out))
         # encoded = self.act_fn(self.fc_embd(encoded))
+
+        shape_ = encoded.shape
         # Compute state prior
-        # prior_means, _prior_std_dev = torch.chunk(
-        #     self.fc_stoch(encoded), 2, dim=1)
-        # prior_std_devs = F.softplus(_prior_std_dev) + self.min_std_dev
-        # prior_states = prior_means + prior_std_devs * \
-        #     torch.randn_like(prior_means)
-        # return prior_means, prior_std_devs, prior_states
-        return encoded
+        prior_means, _prior_std_dev = torch.chunk(
+            self.fc_stoch(encoded.flatten(0,1)), 2, dim=1)
+        prior_std_devs = F.softplus(_prior_std_dev) + self.min_std_dev
+        prior_states = prior_means + prior_std_devs * \
+            torch.randn_like(prior_means)
+
+        return prior_means.reshape(*shape_), prior_std_devs.reshape(*shape_), prior_states.reshape(*shape_)

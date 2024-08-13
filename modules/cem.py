@@ -5,6 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from tqdm import tqdm
 import matplotlib.pylab as plt
+import wandb
 
 from models import bottle
 from modules.dtw import DTW
@@ -18,7 +19,8 @@ class CEM(nn.Module):
                  action_size, 
                  min_std= 0.05, 
                  temperature=0.5,
-                 momentum=0.1):
+                 momentum=0.1,
+                 wandb_run=None):
         self.num_iterations = num_iterations
         self.population_size = population_size
         self.elite_fraction = elite_fraction
@@ -26,6 +28,7 @@ class CEM(nn.Module):
         self.min_std = min_std
         self.temperature = temperature
         self.momentum = momentum
+        self.wandb_run = wandb_run
 
 
     @torch.no_grad()
@@ -37,11 +40,15 @@ class CEM(nn.Module):
               trajectory_length, 
               dynamics_model, 
               observation_model,
-              save_output=False):
+              save_output=False,
+              global_step=None):
+        
+        sample_size = initial_beliefs.shape[0]
         means, stds = torch.zeros(trajectory_length, 1, self.action_size, device=initial_beliefs.device), \
             torch.ones(trajectory_length, 1, self.action_size, device=initial_beliefs.device)
 
-        observations = observations.unsqueeze(0).expand(self.population_size, -1, -1, -1, -1)
+        observations = observations.unsqueeze(0).expand(self.population_size*sample_size, -1, -1, -1, -1)
+        # observations = observations.unsqueeze(0)
 
         for iteration in range(self.num_iterations):
             beliefs, states = (
@@ -51,11 +58,11 @@ class CEM(nn.Module):
 
             # sample N trajectories of length ${trajectory_length}
             beliefs[0], states[0] = initial_beliefs.repeat(self.population_size, 1),\
-                                      initial_states.repeat(self.population_size, 1)
+                                      initial_states.repeat(self.population_size, 1)            
             actions = torch.clamp(
                 means + stds *
                 torch.randn(trajectory_length,
-                            self.population_size, 
+                            self.population_size*sample_size, 
                             self.action_size,
                             device=initial_beliefs.device),
                 -1, 1)
@@ -75,7 +82,7 @@ class CEM(nn.Module):
             # c_ = torch.pow(0.9, torch.arange(trajectory_length, device=initial_beliefs.device))
             dists, directions = DTW(observations, reconst_observations)
 
-            elite_idxs = torch.topk(dists, int(self.population_size*self.elite_fraction), largest=False).indices
+            elite_idxs = torch.topk(dists, int(self.population_size*sample_size/2*self.elite_fraction), largest=False).indices
 
             elite_diffs, elite_actions = dists[elite_idxs], actions[:, elite_idxs]
             
@@ -123,6 +130,7 @@ class CEM(nn.Module):
                 ax[1,i].imshow(r_obs[i])
                 ax[0,i].axis("off")
                 ax[1,i].axis("off")
+            self.wandb_run.log({"Observations": wandb.Image(fig)}, step=global_step)
             fig.savefig('./results/N-'+ str(int(time.time())) + ".png")
             plt.close()
 
