@@ -5,6 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from tqdm import tqdm
 import matplotlib.pylab as plt
+import wandb
 
 from models import bottle
 from modules.dtw import DTW
@@ -18,7 +19,8 @@ class CEM(nn.Module):
                  action_size, 
                  min_std= 0.05, 
                  temperature=0.5,
-                 momentum=0.1):
+                 momentum=0.1,
+                 wandb_run=None):
         self.num_iterations = num_iterations
         self.population_size = population_size
         self.elite_fraction = elite_fraction
@@ -26,6 +28,7 @@ class CEM(nn.Module):
         self.min_std = min_std
         self.temperature = temperature
         self.momentum = momentum
+        self.wandb_run = wandb_run
 
 
     @torch.no_grad()
@@ -37,7 +40,8 @@ class CEM(nn.Module):
               trajectory_length, 
               dynamics_model, 
               observation_model,
-              save_output=False):
+              save_output=False,
+              global_step=None):
         
         sample_size = initial_beliefs.shape[0]
         means, stds = torch.zeros(trajectory_length, 1, self.action_size, device=initial_beliefs.device), \
@@ -126,6 +130,7 @@ class CEM(nn.Module):
                 ax[1,i].imshow(r_obs[i])
                 ax[0,i].axis("off")
                 ax[1,i].axis("off")
+            self.wandb_run.log({"Observations": wandb.Image(fig)}, step=global_step)
             fig.savefig('./results/N-'+ str(int(time.time())) + ".png")
             plt.close()
 

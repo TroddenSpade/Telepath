@@ -53,7 +53,7 @@ def count_vars(module):
 
 
 class Dreamer():
-    def __init__(self, args, is_translation_model=False):
+    def __init__(self, args, is_translation_model=False, wandb_run=None):
         """
         All paras are passed by args
         :param args: a dict that includes parameters
@@ -66,7 +66,7 @@ class Dreamer():
         else:
             self.train_fn = self.update_dreamer_parameters
 
-        self.cem = CEM(10, 128, 1/8., args.action_size)
+        self.cem = CEM(10, 128, 1/8., args.action_size, wandb_run=wandb_run)
 
         self.embedding_encoder = LSTMBeliefPrior(
             args.embedding_size,
@@ -298,7 +298,7 @@ class Dreamer():
         return imag_beliefs, imag_states, imag_ac_logps if with_logprob else None
 
 
-    def translate_trajectory(self, target_observations, rewards, source_length, target_horizon):
+    def translate_trajectory(self, target_observations, rewards, source_length, target_horizon, global_step=None):
         batch_size_ = target_observations.size(1)
         sample_length = 10
         with torch.no_grad():
@@ -324,7 +324,8 @@ class Dreamer():
                 target_horizon,
                 self.transition_model,
                 self.observation_model,
-                i == batch_size_-1
+                i == batch_size_-1,
+                global_step
             )
 
         translated_beliefs, translated_states, translated_rewards = torch.stack(translated_beliefs, dim=1), \
@@ -585,7 +586,8 @@ class Dreamer():
                 observations_2,
                 rewards_2,
                 source_length=self.args.source_len,
-                target_horizon=self.args.target_horizon)
+                target_horizon=self.args.target_horizon,
+                global_step=global_step)
             
             # print((translated_rewards - rewards_2_[2*self.args.belief_prior_len:2*(self.args.source_len+self.args.belief_prior_len)]).sum())
 

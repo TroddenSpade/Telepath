@@ -1,7 +1,9 @@
 import os
+from time import sleep
 import cv2
 import numpy as np
 import plotly
+import psutil
 from plotly.graph_objs import Scatter
 from plotly.graph_objs.scatter import Line
 import torch
@@ -9,6 +11,18 @@ from torch.nn import functional as F
 from typing import Iterable
 from torch.nn import Module
 
+
+def check_power_plugged(need_check=True, check_every=300):
+  if need_check:
+    power_plugged_status = psutil.sensors_battery().power_plugged
+    if power_plugged_status:
+      return 0
+    else:
+      while(not power_plugged_status):
+        sleep(check_every)
+        power_plugged_status = psutil.sensors_battery().power_plugged
+      return 1
+  return 0
 
 # Plots min, max and mean + standard deviation bars of a population over time
 def lineplot(xs, ys_population, title, path='', xaxis='episode'):
