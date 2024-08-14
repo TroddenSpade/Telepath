@@ -204,11 +204,11 @@ for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total
   # Model fitting
   loss_info = agent.train_fn(data, data_2, args.collect_interval, episode)
   print("A1", loss_info)
-  run.log(dict(map(lambda i,j : ("env_1"+i, j) , log_labels, loss_info)), step=episode)
+  run.log(dict(map(lambda i,j : ("env_1/"+i, j) , log_labels, loss_info)), step=episode)
   if episode % args.second_agenr_lr_skip == args.second_agenr_lr_skip - 1:
     loss_info = agent_2.train_fn(data_2, args.collect_interval)
     print("A2", loss_info)
-    run.log(dict(map(lambda i,j : ("env_2"+i, j) , log_labels[:-1], loss_info)), step=episode)
+    run.log(dict(map(lambda i,j : ("env_2/"+i, j) , log_labels[:-1], loss_info)), step=episode)
             
   # Data collection
   with torch.no_grad():
@@ -242,7 +242,7 @@ for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total
     lineplot(metrics['episodes'][-len(metrics['train_rewards']):], metrics['train_rewards'], 'train_rewards',
              results_dir)
     print('episode', episode, 'R:', total_reward)
-    run.log({"env1/train_reward": total_reward}, step=episode)
+    run.log({"env_1/train_reward": total_reward}, step=episode)
 
   # Update agent2
   with torch.no_grad():
@@ -268,7 +268,7 @@ for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total
         pbar.close()
         break
     print('Env 2 - episode', episode, 'R:', total_reward)
-    run.log({"env2/train_reward": total_reward}, step=episode)
+    run.log({"env_2/train_reward": total_reward}, step=episode)
 
   # Test model
   if episode % args.test_interval == 0:
