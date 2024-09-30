@@ -6,6 +6,7 @@ This project presents an approach for transferring policies between two environm
 
 Model-based reinforcement learning (MBRL) involves the development of a dynamics model that anticipates the subsequent state based on the present state and action, facilitating the simulation of "imaginary" trajectories to enhance sampling efficiency. This is achieved by leveraging interaction experiences through a world model, which acts as reusable, task-agnostic knowledge across different tasks. The Dreamer agent, a notable advancement in MBRL, learns in a latent representation space, achieving superior performance and efficiency. In this project, two Dreamer models are used to understand the dynamics of both source and target environments, enabling effective planning and policy transfer between them.
 
+![Telepath-Page-4 drawio](https://github.com/user-attachments/assets/0946a231-617d-425f-9e0e-4a28c6badcec)
 
 The source environment leverages Dreamer's inherent reward model, predicting rewards by learning directly from the environment's reward signals. Dreamer uses these signals to refine its dynamics model and optimize policy performance within the source domain. In contrast, the target environment lacks any reward signals, necessitating an independent reward model. This model is trained by calculating rewards based on trajectory alignments between the source and target environments, where alignment is achieved through Dynamic Time Warping (DTW) using only observations, allowing for effective policy transfer without external rewards in the target domain.
 
