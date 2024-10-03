@@ -1,4 +1,4 @@
-# Mitigating Dynamic Gaps in Policy Transfer Through Trajectory Alignment with Model-based Reinforcement Learning and Dynamic Time Warping
+![cheetah-run-4-2](https://github.com/user-attachments/assets/d094cc66-f905-4531-a557-6c067f78d02b)![Walker-Walk-3-1](https://github.com/user-attachments/assets/042fed99-135b-4f13-8b36-c210c2820434)![BallInCup-6-3](https://github.com/user-attachments/assets/5885b06f-2f38-4d46-938b-e58b190c372e)# Mitigating Dynamic Gaps in Policy Transfer Through Trajectory Alignment with Model-based Reinforcement Learning and Dynamic Time Warping
 
 This project presents an approach for transferring policies between two environments characterized by dynamic gaps, where the target environment lacks inherent rewards. The proposed method leverages model-based reinforcement learning (RL), specifically the Dreamer algorithm, to determine the optimal trajectory within the target environment by aligning it with the trajectory from the source environment. Dynamic Time Warping (DTW) is employed as the primary metric for evaluating the similarity between trajectories based solely on observations, excluding any reliance on environments' states or external signals. This allows for effective alignment while accounting for temporal fluctuations and disparities in dynamics between the two environments. Additionally, the approach incorporates a reward calculation mechanism driven by aligning observations from the source environment, facilitating improved policy adaptation in the target domain. This observation-based alignment is crucial, particularly in the absence of rewards in the target environment.
 
@@ -21,17 +21,19 @@ To address this challenge, we propose a temporally invariant prior belief neural
 This extension is integrated solely into the target world model and is trained using a randomly selected subset of target trajectories, enhancing its temporal invariance. Once the state corresponding to a specific observation is estimated, we can predict subsequent states and their associated observations. This enables us to generate aligned trajectories in the source and target environments, starting from a common observation.
 
 ## Finding the Right Alignment
+The trajectories from the source environment are divided into two segments: the first segment is used to estimate an initial state in the target domain, while the second segment is employed to identify an equivalent sequence in the target environment.
+
+Multiple initial states are sampled from the output distribution of the temporally invariant belief network. For each sampled state, we determine the optimal sequence of actions that best aligns with the second segment of the source environment’s trajectory. To identify the optimal set of actions in the target domain, the Cross-Entropy method is applied, optimizing the alignment between the resulting observations and the source trajectory. Dynamic Time Warping (DTW) is utilized to achieve this alignment by minimizing the loss function, thereby tightening the correspondence between the imagined trajectory in the target environment and the original trajectory from the source environment.
 
 ![281](https://github.com/user-attachments/assets/121485a1-4278-432e-b48f-df7faa0fd338)
-
 
 ![N-1723261453](https://github.com/user-attachments/assets/2d654c12-d3d9-4d86-8960-84e61d0b73d9)
 ![N-1723264536](https://github.com/user-attachments/assets/77135d34-ff62-4de3-a2ae-9daffe0d5405)
 ![N-1723266437](https://github.com/user-attachments/assets/b5ebfcf3-edb7-4bbd-86cc-660c4408a858)
-![N-1723268002](https://github.com/user-attachments/assets/f966cbc9-2059-4e5a-88f4-dab814a71945)
-![N-1723269074](https://github.com/user-attachments/assets/504d57d7-af4a-4e59-8ff5-98a4ac4403d3)
 ![N-1723276875](https://github.com/user-attachments/assets/a2798c74-4f53-45df-8852-a644d8e577da)
 ![N-1723281727](https://github.com/user-attachments/assets/be7d24e7-2776-4c22-90bf-ea621068e984)
 
 
+The rewards for the target model are calculated proportionally by evaluating the ratio of source transitions to target transitions following the alignment. This proportional reward scheme reflects how closely the transitions in the target environment align with those of the source environment, ensuring that the reward signal is informed by the degree of alignment between the two trajectories.
 
+## Results
