@@ -1,4 +1,9 @@
-![cheetah-run-4-2](https://github.com/user-attachments/assets/d094cc66-f905-4531-a557-6c067f78d02b)![Walker-Walk-3-1](https://github.com/user-attachments/assets/042fed99-135b-4f13-8b36-c210c2820434)![BallInCup-6-3](https://github.com/user-attachments/assets/5885b06f-2f38-4d46-938b-e58b190c372e)# Mitigating Dynamic Gaps in Policy Transfer Through Trajectory Alignment with Model-based Reinforcement Learning and Dynamic Time Warping
+# Mitigating Dynamic Gaps in Policy Transfer Through Trajectory Alignment with Model-based Reinforcement Learning and Dynamic Time Warping
+
+"This is in progress and will be updated with additional content shortly."
+
+![ch](https://github.com/user-attachments/assets/85936c3a-21fa-41b8-abd4-385122ce95b7)
+
 
 This project presents an approach for transferring policies between two environments characterized by dynamic gaps, where the target environment lacks inherent rewards. The proposed method leverages model-based reinforcement learning (RL), specifically the Dreamer algorithm, to determine the optimal trajectory within the target environment by aligning it with the trajectory from the source environment. Dynamic Time Warping (DTW) is employed as the primary metric for evaluating the similarity between trajectories based solely on observations, excluding any reliance on environments' states or external signals. This allows for effective alignment while accounting for temporal fluctuations and disparities in dynamics between the two environments. Additionally, the approach incorporates a reward calculation mechanism driven by aligning observations from the source environment, facilitating improved policy adaptation in the target domain. This observation-based alignment is crucial, particularly in the absence of rewards in the target environment.
 
@@ -33,7 +38,12 @@ Multiple initial states are sampled from the output distribution of the temporal
 ![N-1723276875](https://github.com/user-attachments/assets/a2798c74-4f53-45df-8852-a644d8e577da)
 ![N-1723281727](https://github.com/user-attachments/assets/be7d24e7-2776-4c22-90bf-ea621068e984)
 
-
 The rewards for the target model are calculated proportionally by evaluating the ratio of source transitions to target transitions following the alignment. This proportional reward scheme reflects how closely the transitions in the target environment align with those of the source environment, ensuring that the reward signal is informed by the degree of alignment between the two trajectories.
 
 ## Results
+
+### Walker-Walk
+
+![ww-2-1](https://github.com/user-attachments/assets/14fb098f-e382-499b-a167-ab17587b4561)
+
+![ww-3-1](https://github.com/user-attachments/assets/8d6b0186-f964-4871-88ca-0e676678a080)
