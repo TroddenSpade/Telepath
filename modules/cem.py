@@ -4,7 +4,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from tqdm import tqdm
+
 import matplotlib.pylab as plt
+plt.switch_backend('agg')
+
 import wandb
 
 from models import bottle

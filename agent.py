@@ -2,7 +2,10 @@ import os
 from copy import deepcopy
 import time
 import cv2
+
 from matplotlib import pyplot as plt
+plt.switch_backend('agg')
+
 import numpy as np
 import torch
 from torch import nn, optim
@@ -499,7 +502,7 @@ class Dreamer():
                 embeds,
                 nonterminals)
 
-            max_skip = 3
+            max_skip = self.args.prior_belief_max_skip
             beliefs_loss = 0
             for _ in range(max_skip):
                 idxs = np.cumsum(np.random.randint(1, max_skip+1, size=self.args.chunk_size))

@@ -38,6 +38,7 @@ parser.add_argument('--delay-cem', type=int, default=0, metavar='D', help='delay
 parser.add_argument('--expl-amount-2', type=float, default=0.5, help='exploration noise')
 parser.add_argument('--second-agenr-lr-skip', type=int, default=5, metavar='S', help='second agent learning rate skip')
 parser.add_argument('--check-power-plugged', type=bool, default=True, metavar='C', help='check power plugged')
+parser.add_argument('--prior_belief_max_skip', type=int, default=3, metavar='S', help='prior belief max skip')
 
 parser.add_argument('--episodes', type=int, default=1000, metavar='E', help='Total number of episodes')
 parser.add_argument('--seed-episodes', type=int, default=5, metavar='S', help='Seed episodes')
