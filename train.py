@@ -10,6 +10,7 @@ from tqdm import tqdm
 from env import CONTROL_SUITE_ENVS, Env, GYM_ENVS, EnvBatcher
 from agent import Dreamer
 from memory import ExperienceReplay
+from modules.vae import CycleVAE
 from utils import check_power_plugged, lineplot, write_video
 
 # Hyperparameters
@@ -27,7 +28,7 @@ parser.add_argument('--embedding-size', type=int, default=1024, metavar='E', hel
 parser.add_argument('--hidden-size', type=int, default=300, metavar='H', help='Hidden size')  # paper:300; tf_implementation:400; aligned wit paper. 
 parser.add_argument('--belief-size', type=int, default=200, metavar='H', help='Belief/hidden size')
 parser.add_argument('--state-size', type=int, default=30, metavar='Z', help='State/latent size')
-parser.add_argument('--action-repeat', type=int, default=2, metavar='R', help='Action repeat')
+parser.add_argument('--action-repeat', type=int, default=4, metavar='R', help='Action repeat')
 
 parser.add_argument('--second-action-repeat', type=int, default=4, metavar='R', help='Action repeat')
 parser.add_argument('--belief-prior-range', type=int, default=10, metavar='I', help='initial range')
@@ -101,7 +102,7 @@ summary_name = results_dir + "/{}_{}_log"
 
 # Initialise training environment and experience replay memory
 env = Env(args.env, args.symbolic, args.seed, args.max_episode_length, args.action_repeat, args.bit_depth)
-env_2 = Env(args.env, args.symbolic, args.seed, args.max_episode_length, args.second_action_repeat, args.bit_depth)
+env_2 = Env(args.env, args.symbolic, args.seed, args.max_episode_length, args.second_action_repeat, args.bit_depth, camera_id=1)
 
 args.observation_size, args.action_size = env.observation_size, env.action_size
 args_2 = copy.deepcopy(args)
@@ -115,6 +116,10 @@ D = ExperienceReplay(args.experience_size, args.symbolic, env.observation_size, 
                      args.device)
 D_2 = ExperienceReplay(args.experience_size, args.symbolic, env.observation_size, env.action_size, args.bit_depth,
                       args.device)
+
+# Instantiate model and optimizer
+cvae = CycleVAE(args.embedding_size, 100)
+optimizer = torch.optim.Adam(cvae.parameters(), lr=1e-3)
 
 # Initialise dataset D with S random seed episodes
 for s in range(1, args.seed_episodes + 1):
@@ -210,6 +215,40 @@ for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total
     loss_info = agent_2.train_fn(data_2, args.collect_interval)
     print("A2", loss_info)
     run.log(dict(map(lambda i,j : ("env_2/"+i, j) , log_labels[:-1], loss_info)), step=episode)
+
+
+  def reconstruction_loss(recon_x, x):
+    return F.mse_loss(recon_x, x, reduction='mean')
+
+  def kl_divergence(mu, logvar):
+    return -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+
+  def cycle_consistency_loss(x, recon_x_from_y, y, recon_y_from_x):
+    loss_X_to_Y_to_X = F.mse_loss(recon_x_from_y, x, reduction='mean')
+    loss_Y_to_X_to_Y = F.mse_loss(recon_y_from_x, y, reduction='mean')
+    return loss_X_to_Y_to_X + loss_Y_to_X_to_Y
+
+  cvae.train()
+  optimizer.zero_grad()
+
+  recon_1, recon_2, recon_1_from_2, recon_2_from_1, mu_1, logvar_1, mu_2, logvar_2 = cvae(x_1, x_2)
+
+  recon_loss_1 = reconstruction_loss(recon_1, x_1)
+  recon_loss_2 = reconstruction_loss(recon_2, x_2)
+  kl_loss_1 = kl_divergence(mu_1, logvar_1)
+  kl_loss_2 = kl_divergence(mu_2, logvar_2)
+  cycle_loss = cycle_consistency_loss(x_1, recon_1_from_2, x_2, recon_2_from_1)
+
+  # Total loss
+  total_loss = (1.0 * (recon_loss_1 + recon_loss_2) +
+                0.01 * (kl_loss_1 + kl_loss_2) +
+                10.0 * cycle_loss)
+
+  # Backpropagation
+  total_loss.backward()
+  optimizer.step()
+
+  print(total_loss.item())
             
   # Data collection
   with torch.no_grad():
@@ -255,11 +294,12 @@ for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total
     pbar = tqdm(range(args.max_episode_length // args.second_action_repeat), leave=False, position=0)
     for t in pbar:
       # maintain belief and posterior_state
-      belief, posterior_state = agent_2.infer_state(observation.to(device=args.device), action, belief, posterior_state)
-      action = agent_2.select_action((belief, posterior_state), deterministic=False)
+      # belief, posterior_state = agent_2.infer_state(observation.to(device=args.device), action, belief, posterior_state)
+      # action = agent_2.select_action((belief, posterior_state), deterministic=False)
+      action = env_2.sample_random_action()
 
       # interact with env
-      next_observation, reward, done = env_2.step(action.cpu() if isinstance(env, EnvBatcher) else action[0].cpu())  # Perform environment step (action repeats handled internally)
+      next_observation, reward, done = env_2.step(action)  # Perform environment step (action repeats handled internally)
       D_2.append(next_observation, action.cpu(), reward, done)
       total_reward += reward
       done += done

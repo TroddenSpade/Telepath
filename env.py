@@ -34,7 +34,7 @@ def _images_to_observation(images, bit_depth):
 
 
 class ControlSuiteEnv():
-    def __init__(self, env, symbolic, seed, max_episode_length, action_repeat, bit_depth):
+    def __init__(self, env, symbolic, seed, max_episode_length, action_repeat, bit_depth, camera_id=0):
         from dm_control import suite
         from dm_control.suite.wrappers import pixels
         domain, task = env.split('-')
@@ -49,6 +49,7 @@ class ControlSuiteEnv():
             print('Using action repeat %d; recommended action repeat for domain is %d' % (
                 action_repeat, CONTROL_SUITE_ACTION_REPEATS[domain]))
         self.bit_depth = bit_depth
+        self.camera_id = camera_id
 
     def reset(self):
         self.t = 0  # Reset internal timer
@@ -56,7 +57,7 @@ class ControlSuiteEnv():
         if self.symbolic:
             return torch.tensor(np.concatenate([np.asarray([obs]) if isinstance(obs, float) else obs for obs in state.observation.values()], axis=0), dtype=torch.float32).unsqueeze(dim=0)
         else:
-            return _images_to_observation(self._env.physics.render(camera_id=0), self.bit_depth)
+            return _images_to_observation(self._env.physics.render(camera_id=self.camera_id), self.bit_depth)
 
     def step(self, action):
         action = action.detach().numpy()
@@ -73,11 +74,11 @@ class ControlSuiteEnv():
                 obs, float) else obs for obs in state.observation.values()], axis=0), dtype=torch.float32).unsqueeze(dim=0)
         else:
             observation = _images_to_observation(
-                self._env.physics.render(camera_id=0), self.bit_depth)
+                self._env.physics.render(camera_id=self.camera_id), self.bit_depth)
         return observation, reward, done
 
     def render(self):
-        cv2.imshow('screen', self._env.physics.render(camera_id=0)[:, :, ::-1])
+        cv2.imshow('screen', self._env.physics.render(camera_id=self.camera_id)[:, :, ::-1])
         cv2.waitKey(1)
 
     def close(self):
@@ -153,11 +154,11 @@ class GymEnv():
         return torch.from_numpy(self._env.action_space.sample())
 
 
-def Env(env, symbolic, seed, max_episode_length, action_repeat, bit_depth):
+def Env(env, symbolic, seed, max_episode_length, action_repeat, bit_depth, camera_id=0):
     if env in GYM_ENVS:
         return GymEnv(env, symbolic, seed, max_episode_length, action_repeat, bit_depth)
     elif env in CONTROL_SUITE_ENVS:
-        return ControlSuiteEnv(env, symbolic, seed, max_episode_length, action_repeat, bit_depth)
+        return ControlSuiteEnv(env, symbolic, seed, max_episode_length, action_repeat, bit_depth, camera_id)
 
 
 # Wrapper for batching environments together
