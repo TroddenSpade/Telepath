@@ -227,7 +227,15 @@ for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total
     loss_X_to_Y_to_X = F.mse_loss(recon_x_from_y, x, reduction='mean')
     loss_Y_to_X_to_Y = F.mse_loss(recon_y_from_x, y, reduction='mean')
     return loss_X_to_Y_to_X + loss_Y_to_X_to_Y
-
+  
+  
+  observations, _, _, _ = D.sample(args.batch_size, 1)
+  observations_2, _, _, _ = D_2.sample(args.batch_size, 1)
+  print(observations.shape)
+  
+  x_1 = bottle(agent.encoder, (observations, ))
+  x_2 = bottle(agent_2.encoder, (observations_2, ))
+  
   cvae.train()
   optimizer.zero_grad()
 
