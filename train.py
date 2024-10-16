@@ -18,7 +18,7 @@ parser = argparse.ArgumentParser(description='Dreamer')
 
 parser.add_argument('--seed', type=int, default=1, metavar='S', help='Random seed')
 parser.add_argument('--disable-cuda', action='store_true', help='Disable CUDA')
-parser.add_argument('--env', type=str, default='cheetah-run', choices=GYM_ENVS + CONTROL_SUITE_ENVS, help='Gym/Control Suite environment')
+parser.add_argument('--env', type=str, default='walker-walk', choices=GYM_ENVS + CONTROL_SUITE_ENVS, help='Gym/Control Suite environment')
 parser.add_argument('--symbolic', action='store_true', help='Symbolic features')
 parser.add_argument('--max-episode-length', type=int, default=1000, metavar='T', help='Max episode length')
 parser.add_argument('--experience-size', type=int, default=1000000, metavar='D', help='Experience replay size')  # Original implementation has an unlimited buffer size, but 1 million is the max experience collected anyway
@@ -28,15 +28,15 @@ parser.add_argument('--embedding-size', type=int, default=1024, metavar='E', hel
 parser.add_argument('--hidden-size', type=int, default=300, metavar='H', help='Hidden size')  # paper:300; tf_implementation:400; aligned wit paper. 
 parser.add_argument('--belief-size', type=int, default=200, metavar='H', help='Belief/hidden size')
 parser.add_argument('--state-size', type=int, default=30, metavar='Z', help='State/latent size')
-parser.add_argument('--action-repeat', type=int, default=4, metavar='R', help='Action repeat')
+parser.add_argument('--action-repeat', type=int, default=2, metavar='R', help='Action repeat')
 
-parser.add_argument('--second-action-repeat', type=int, default=4, metavar='R', help='Action repeat')
+parser.add_argument('--second-action-repeat', type=int, default=2, metavar='R', help='Action repeat')
 parser.add_argument('--belief-prior-range', type=int, default=10, metavar='I', help='initial range')
 parser.add_argument('--belief-prior-len', type=int, default=8, metavar='I', help='initial length to get the belief prior')
 parser.add_argument('--target-horizon', type=int, default=10, metavar='T', help='target horizon')
 parser.add_argument('--source-len', type=int, default=5, metavar='S', help='source length')
 parser.add_argument('--delay-cem', type=int, default=0, metavar='D', help='delay cem')
-parser.add_argument('--expl-amount-2', type=float, default=0.5, help='exploration noise')
+parser.add_argument('--expl-amount-2', type=float, default=0.3, help='exploration noise')
 parser.add_argument('--second-agenr-lr-skip', type=int, default=5, metavar='S', help='second agent learning rate skip')
 parser.add_argument('--check-power-plugged', type=bool, default=True, metavar='C', help='check power plugged')
 parser.add_argument('--prior_belief_max_skip', type=int, default=3, metavar='S', help='prior belief max skip')
@@ -62,7 +62,7 @@ parser.add_argument('--planning-horizon', type=int, default=15, metavar='H', hel
 parser.add_argument('--discount', type=float, default=0.99, metavar='H', help='Planning horizon distance')
 parser.add_argument('--disclam', type=float, default=0.95, metavar='H', help='discount rate to compute return')
 parser.add_argument('--test', action='store_true', help='Test only')
-parser.add_argument('--test-interval', type=int, default=25, metavar='I', help='Test interval (episodes)')
+parser.add_argument('--test-interval', type=int, default=10, metavar='I', help='Test interval (episodes)')
 parser.add_argument('--test-episodes', type=int, default=10, metavar='E', help='Number of test episodes')
 parser.add_argument('--checkpoint-interval', type=int, default=100, metavar='I', help='Checkpoint interval (episodes)')
 parser.add_argument('--checkpoint-experience', action='store_true', help='Checkpoint experience replay')
@@ -109,7 +109,7 @@ args_2 = copy.deepcopy(args)
 args_2.expl_amount = args.expl_amount_2
 
 # Initialise agent
-agent = Dreamer(args, is_translation_model=True, wandb_run=run)
+agent = Dreamer(args, is_translation_model=False, wandb_run=run)
 agent_2 = Dreamer(args_2, is_translation_model=False)
 
 D = ExperienceReplay(args.experience_size, args.symbolic, env.observation_size, env.action_size, args.bit_depth,
@@ -118,7 +118,7 @@ D_2 = ExperienceReplay(args.experience_size, args.symbolic, env.observation_size
                       args.device)
 
 # Instantiate model and optimizer
-cvae = CycleVAE(args.embedding_size, 100)
+cvae = CycleVAE(args.embedding_size, 100).to(args.device)
 optimizer = torch.optim.Adam(cvae.parameters(), lr=1e-3)
 
 # Initialise dataset D with S random seed episodes
@@ -208,14 +208,13 @@ for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total
   data = D.sample(args.batch_size, args.chunk_size)
   data_2 = D_2.sample(args.batch_size, args.chunk_size)
   # Model fitting
-  loss_info = agent.train_fn(data, data_2, args.collect_interval, episode)
+  loss_info = agent.train_fn(data, args.collect_interval)
   print("A1", loss_info)
   run.log(dict(map(lambda i,j : ("env_1/"+i, j) , log_labels, loss_info)), step=episode)
-  if episode % args.second_agenr_lr_skip == args.second_agenr_lr_skip - 1:
-    loss_info = agent_2.train_fn(data_2, args.collect_interval)
-    print("A2", loss_info)
-    run.log(dict(map(lambda i,j : ("env_2/"+i, j) , log_labels[:-1], loss_info)), step=episode)
-
+  # if episode % args.second_agenr_lr_skip == args.second_agenr_lr_skip - 1:
+  loss_info = agent_2.train_fn(data_2, args.collect_interval)
+  print("A2", loss_info)
+  run.log(dict(map(lambda i,j : ("env_2/"+i, j) , log_labels[:-1], loss_info)), step=episode)
 
   def reconstruction_loss(recon_x, x):
     return F.mse_loss(recon_x, x, reduction='mean')
@@ -227,36 +226,34 @@ for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total
     loss_X_to_Y_to_X = F.mse_loss(recon_x_from_y, x, reduction='mean')
     loss_Y_to_X_to_Y = F.mse_loss(recon_y_from_x, y, reduction='mean')
     return loss_X_to_Y_to_X + loss_Y_to_X_to_Y
+
+  total_loss = 0
+  for i in tqdm(range(100)):
+    observations, _, _, _ = D.sample(args.batch_size, 1)
+    observations_2, _, _, _ = D_2.sample(args.batch_size, 1)
   
-  
-  observations, _, _, _ = D.sample(args.batch_size, 1)
-  observations_2, _, _, _ = D_2.sample(args.batch_size, 1)
-  print(observations.shape)
-  
-  x_1 = bottle(agent.encoder, (observations, ))
-  x_2 = bottle(agent_2.encoder, (observations_2, ))
-  
-  cvae.train()
-  optimizer.zero_grad()
+    x_1 = agent.encoder(observations[0]).detach()
+    x_2 = agent_2.encoder(observations_2[0]).detach()
+    cvae.train()
+    optimizer.zero_grad()
 
-  recon_1, recon_2, recon_1_from_2, recon_2_from_1, mu_1, logvar_1, mu_2, logvar_2 = cvae(x_1, x_2)
+    recon_1, recon_2, recon_1_from_2, recon_2_from_1, mu_1, logvar_1, mu_2, logvar_2 = cvae(x_1, x_2)
 
-  recon_loss_1 = reconstruction_loss(recon_1, x_1)
-  recon_loss_2 = reconstruction_loss(recon_2, x_2)
-  kl_loss_1 = kl_divergence(mu_1, logvar_1)
-  kl_loss_2 = kl_divergence(mu_2, logvar_2)
-  cycle_loss = cycle_consistency_loss(x_1, recon_1_from_2, x_2, recon_2_from_1)
+    recon_loss_1 = reconstruction_loss(recon_1, x_1)
+    recon_loss_2 = reconstruction_loss(recon_2, x_2)
+    kl_loss_1 = kl_divergence(mu_1, logvar_1)
+    kl_loss_2 = kl_divergence(mu_2, logvar_2)
+    cycle_loss = cycle_consistency_loss(x_1, recon_1_from_2, x_2, recon_2_from_1)
 
-  # Total loss
-  total_loss = (1.0 * (recon_loss_1 + recon_loss_2) +
-                0.01 * (kl_loss_1 + kl_loss_2) +
-                10.0 * cycle_loss)
+    loss = (1.0 * (recon_loss_1 + recon_loss_2) +
+                  0.01 * (kl_loss_1 + kl_loss_2) +
+                  10.0 * cycle_loss)
 
-  # Backpropagation
-  total_loss.backward()
-  optimizer.step()
+    loss.backward()
+    optimizer.step()
+    total_loss += loss.item()
 
-  print(total_loss.item())
+  print(total_loss)
             
   # Data collection
   with torch.no_grad():
@@ -302,12 +299,13 @@ for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total
     pbar = tqdm(range(args.max_episode_length // args.second_action_repeat), leave=False, position=0)
     for t in pbar:
       # maintain belief and posterior_state
-      # belief, posterior_state = agent_2.infer_state(observation.to(device=args.device), action, belief, posterior_state)
-      # action = agent_2.select_action((belief, posterior_state), deterministic=False)
-      action = env_2.sample_random_action()
+      belief, posterior_state = agent_2.infer_state(observation.to(device=args.device), action, belief, posterior_state)
+      action = agent_2.select_action((belief, posterior_state), deterministic=False)
+      # action = env_2.sample_random_action()
 
       # interact with env
-      next_observation, reward, done = env_2.step(action)  # Perform environment step (action repeats handled internally)
+      next_observation, reward, done = env_2.step(action.cpu() if isinstance(env, EnvBatcher) else action[0].cpu())  # Perform environment step (action repeats handled internally)
+      # next_observation, reward, done = env_2.step(action)  # Perform environment step (action repeats handled internally)
       D_2.append(next_observation, action.cpu(), reward, done)
       total_reward += reward
       done += done
@@ -346,8 +344,24 @@ for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total
       action = torch.zeros(args.test_episodes, env.action_size, device=args.device)
 
       for t in tqdm(range(args.max_episode_length // args.action_repeat), leave=False, position=0):
-        belief, posterior_state = agent.infer_state(observation.to(device=args.device), action, belief, posterior_state)
-        action = agent.select_action((belief, posterior_state), deterministic=True)
+        # belief, posterior_state = agent.infer_state(observation.to(device=args.device), action, belief, posterior_state)
+        observation_ = observation.to(device=args.device)
+        x = agent.encoder(observation_)
+        h = cvae.encoder_1(x)
+        mu_, logvar_ = cvae.fc_mu_1(h), cvae.fc_logvar_1(h)
+        z_ = cvae.reparameterize(mu_, logvar_)
+        x = cvae.decoder_2(z_)
+
+        belief, _, _, _, posterior_state, _, _ = agent_2.transition_model(
+            posterior_state,
+            action.unsqueeze(dim=0),
+            belief,
+            x.unsqueeze(dim=0))  # Action and observation need extra time dimension
+
+        belief, posterior_state = belief.squeeze(dim=0), posterior_state.squeeze(
+            dim=0)  # Remove time dimension from belief/state
+
+        action = agent_2.select_action((belief, posterior_state), deterministic=True)
         # interact with env
         next_observation, reward, done = test_envs.step(action.cpu() if isinstance(test_envs, EnvBatcher) else action[
           0].cpu())  # Perform environment step (action repeats handled internally)
@@ -355,7 +369,7 @@ for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total
 
         if not args.symbolic:  # Collect real vs. predicted frames for video
           video_frames.append(
-            make_grid(torch.cat([observation, agent.observation_model(belief, posterior_state).cpu()], dim=3) + 0.5,
+            make_grid(torch.cat([observation, agent_2.observation_model(belief, posterior_state).cpu()], dim=3) + 0.5,
                       nrow=5).numpy())  # Decentre
         observation = next_observation
         if done.sum().item() == args.test_episodes:
