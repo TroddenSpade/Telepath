@@ -118,7 +118,7 @@ D_2 = ExperienceReplay(args.experience_size, args.symbolic, env.observation_size
                       args.device)
 
 # Instantiate model and optimizer
-cvae = CycleVAE(args.embedding_size, 100).to(args.device)
+cvae = CycleVAE(args.embedding_size, 512).to(args.device)
 optimizer = torch.optim.Adam(cvae.parameters(), lr=1e-3)
 
 # Initialise dataset D with S random seed episodes
@@ -237,17 +237,17 @@ for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total
     cvae.train()
     optimizer.zero_grad()
 
-    recon_1, recon_2, recon_1_from_2, recon_2_from_1, mu_1, logvar_1, mu_2, logvar_2 = cvae(x_1, x_2)
+    recon_1, recon_2, recon_1_from_2, recon_2_from_1 = cvae(x_1, x_2)
 
     recon_loss_1 = reconstruction_loss(recon_1, x_1)
     recon_loss_2 = reconstruction_loss(recon_2, x_2)
-    kl_loss_1 = kl_divergence(mu_1, logvar_1)
-    kl_loss_2 = kl_divergence(mu_2, logvar_2)
+    # kl_loss_1 = kl_divergence(mu_1, logvar_1)
+    # kl_loss_2 = kl_divergence(mu_2, logvar_2)
     cycle_loss = cycle_consistency_loss(x_1, recon_1_from_2, x_2, recon_2_from_1)
 
     loss = (1.0 * (recon_loss_1 + recon_loss_2) +
-                  0.01 * (kl_loss_1 + kl_loss_2) +
-                  10.0 * cycle_loss)
+                  # 0.01 * (kl_loss_1 + kl_loss_2) +
+                  5.0 * cycle_loss)
 
     loss.backward()
     optimizer.step()
