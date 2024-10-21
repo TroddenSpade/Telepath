@@ -59,11 +59,22 @@ class CycleVAE(nn.Module):
         mu_2, logvar_2 = self.fc_mu_2(h_2), self.fc_logvar_2(h_2)
         z_2 = self.reparameterize(mu_2, logvar_2)
 
-        recon_2_from_1 = self.decoder_2(z_1)
-        recon_1_from_2 = self.decoder_1(z_2)
-
         recon_1 = self.decoder_1(z_1)
         recon_2 = self.decoder_2(z_2)
+
+        _2_from_1 = self.decoder_2(z_1)
+        _1_from_2 = self.decoder_1(z_2)
+
+        h_1_ = self.encoder_1(_1_from_2)
+        mu_1_, logvar_1_ = self.fc_mu_1(h_1_), self.fc_logvar_1(h_1_)
+        z_1_ = self.reparameterize(mu_1_, logvar_1_)
+
+        h_2_ = self.encoder_2(_2_from_1)
+        mu_2_, logvar_2_ = self.fc_mu_2(h_2_), self.fc_logvar_2(h_2_)
+        z_2_ = self.reparameterize(mu_2_, logvar_2_)
+
+        recon_1_from_2 = self.decoder_1(z_2_)
+        recon_2_from_1 = self.decoder_2(z_1_)
         
-        return recon_1, recon_2, recon_1_from_2, recon_2_from_1, mu_1, logvar_1, mu_2, logvar_2
+        return recon_1, recon_2, recon_1_from_2, recon_2_from_1, mu_1, logvar_1, mu_2, logvar_2, mu_1_, logvar_1_, mu_2_, logvar_2_
 

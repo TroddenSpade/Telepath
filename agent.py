@@ -472,6 +472,28 @@ class Dreamer():
 
             loss_info.append([observation_loss.item(), reward_loss.item(), kl_loss.item(), pcont_loss.item() if self.args.pcont else 0, actor_loss.item(), critic_loss.item()])
 
+
+        #salient pixels
+        sampled_inputs = observations[0, 0:5]
+        sampled_inputs.requires_grad = True
+
+        features = self.encoder(sampled_inputs)
+
+        # salient_pixels = torch.autograd.grad(
+        #     features.sum(), sampled_inputs, create_graph=True)[0]
+        features.backward(torch.ones_like(features))
+        salient_map = torch.abs(sampled_inputs.grad.data).mean(1)
+        salient_map = salient_map.cpu().numpy()
+        salient_map = (salient_map - salient_map.min()) / (salient_map.max() - salient_map.min())
+
+        sampled_inputs = sampled_inputs.detach().permute(0, 2, 3, 1).cpu().numpy()+0.5
+
+        fig, ax = plt.subplots(1, 5, figsize=(10, 2))
+        for i in range(5):
+            sampled_inputs[i][:,:,0] = (salient_map[i] + sampled_inputs[i][:,:,0]) / 2
+            ax[i].imshow(sampled_inputs[i])
+        fig.savefig('./results/HEAT_' + str(int(time.time()) % 5) + ".png")
+
         # finally, update target value function every #gradient_steps
         with torch.no_grad():
             self.target_value_model.load_state_dict(self.value_model.state_dict())
