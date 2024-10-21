@@ -6,29 +6,29 @@ class CycleVAE(nn.Module):
     def __init__(self, input_size, latent_size):
         super().__init__()
         self.encoder_1 = nn.Sequential(
-            nn.Linear(input_size, 512),
+            nn.Linear(input_size, 1024),
             nn.ReLU(),
-            nn.Linear(512, latent_size),
+            nn.Linear(1024, latent_size),
         )
         # self.fc_mu_1 = nn.Linear(512, latent_size)
         # self.fc_logvar_1 = nn.Linear(512, latent_size)
         self.decoder_1 = nn.Sequential(
-            nn.Linear(latent_size, 512),
+            nn.Linear(latent_size, 1024),
             nn.ReLU(),
-            nn.Linear(512, input_size)
+            nn.Linear(1024, input_size)
         )
 
         self.encoder_2 = nn.Sequential(
-            nn.Linear(input_size, 512),
+            nn.Linear(input_size, 1024),
             nn.ReLU(),
-            nn.Linear(512, latent_size),
+            nn.Linear(1024, latent_size),
         )
         # self.fc_mu_2 = nn.Linear(512, latent_size)
         # self.fc_logvar_2 = nn.Linear(512, latent_size)
         self.decoder_2 = nn.Sequential(
-            nn.Linear(latent_size, 512),
+            nn.Linear(latent_size, 1024),
             nn.ReLU(),
-            nn.Linear(512, input_size)
+            nn.Linear(1024, input_size)
         )
 
     def reparameterize(self, mu, logvar):

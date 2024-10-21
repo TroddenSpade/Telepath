@@ -18,7 +18,7 @@ parser = argparse.ArgumentParser(description='Dreamer')
 
 parser.add_argument('--seed', type=int, default=1, metavar='S', help='Random seed')
 parser.add_argument('--disable-cuda', action='store_true', help='Disable CUDA')
-parser.add_argument('--env', type=str, default='walker-walk', choices=GYM_ENVS + CONTROL_SUITE_ENVS, help='Gym/Control Suite environment')
+parser.add_argument('--env', type=str, default='cheetah-run', choices=GYM_ENVS + CONTROL_SUITE_ENVS, help='Gym/Control Suite environment')
 parser.add_argument('--symbolic', action='store_true', help='Symbolic features')
 parser.add_argument('--max-episode-length', type=int, default=1000, metavar='T', help='Max episode length')
 parser.add_argument('--experience-size', type=int, default=1000000, metavar='D', help='Experience replay size')  # Original implementation has an unlimited buffer size, but 1 million is the max experience collected anyway
@@ -28,9 +28,9 @@ parser.add_argument('--embedding-size', type=int, default=1024, metavar='E', hel
 parser.add_argument('--hidden-size', type=int, default=300, metavar='H', help='Hidden size')  # paper:300; tf_implementation:400; aligned wit paper. 
 parser.add_argument('--belief-size', type=int, default=200, metavar='H', help='Belief/hidden size')
 parser.add_argument('--state-size', type=int, default=30, metavar='Z', help='State/latent size')
-parser.add_argument('--action-repeat', type=int, default=2, metavar='R', help='Action repeat')
+parser.add_argument('--action-repeat', type=int, default=4, metavar='R', help='Action repeat')
 
-parser.add_argument('--second-action-repeat', type=int, default=2, metavar='R', help='Action repeat')
+parser.add_argument('--second-action-repeat', type=int, default=4, metavar='R', help='Action repeat')
 parser.add_argument('--belief-prior-range', type=int, default=10, metavar='I', help='initial range')
 parser.add_argument('--belief-prior-len', type=int, default=8, metavar='I', help='initial length to get the belief prior')
 parser.add_argument('--target-horizon', type=int, default=10, metavar='T', help='target horizon')
@@ -229,8 +229,8 @@ for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total
 
   total_loss = 0
   for i in tqdm(range(100)):
-    observations, _, _, _ = D.sample(args.batch_size, 1)
-    observations_2, _, _, _ = D_2.sample(args.batch_size, 1)
+    observations, a_1, _, _ = D.sample(1, 1)
+    observations_2, a_2, _, _ = D_2.sample(1, 1)
   
     x_1 = agent.encoder(observations[0]).detach()
     x_2 = agent_2.encoder(observations_2[0]).detach()
@@ -238,6 +238,15 @@ for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total
     optimizer.zero_grad()
 
     recon_1, recon_2, recon_1_from_2, recon_2_from_1 = cvae(x_1, x_2)
+
+    with torch.no_grad():
+      belief, _, _, _, posterior_state, _, _ = agent.transition_model(
+            torch.zeros(1, 1, device=args.device),
+            a_1,
+            torch.zeros(1, 1, device=args.device),
+            recon_1.unsqueeze(dim=0))
+
+      belief, posterior_state = belief.squeeze(dim=0), posterior_state.squeeze(dim=0)
 
     recon_loss_1 = reconstruction_loss(recon_1, x_1)
     recon_loss_2 = reconstruction_loss(recon_2, x_2)
@@ -251,7 +260,7 @@ for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total
 
     loss.backward()
     optimizer.step()
-    total_loss += loss.item()
+    total_loss += np.array([recon_loss_1.item(), recon_loss_2.item(), cycle_loss.item()])
 
   print(total_loss)
             
@@ -347,9 +356,7 @@ for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total
         # belief, posterior_state = agent.infer_state(observation.to(device=args.device), action, belief, posterior_state)
         observation_ = observation.to(device=args.device)
         x = agent.encoder(observation_)
-        h = cvae.encoder_1(x)
-        mu_, logvar_ = cvae.fc_mu_1(h), cvae.fc_logvar_1(h)
-        z_ = cvae.reparameterize(mu_, logvar_)
+        z_ = cvae.encoder_1(x)
         x = cvae.decoder_2(z_)
 
         belief, _, _, _, posterior_state, _, _ = agent_2.transition_model(
