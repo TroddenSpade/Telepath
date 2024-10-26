@@ -119,7 +119,7 @@ D_2 = ExperienceReplay(args.experience_size, args.symbolic, env.observation_size
 
 # Instantiate model and optimizer
 cvae = CycleVAE(args.embedding_size, 512).to(args.device)
-optimizer = torch.optim.Adam(cvae.parameters(), lr=1e-3)
+optimizer = torch.optim.Adam(cvae.parameters(), lr=2e-4)
 
 # Initialise dataset D with S random seed episodes
 for s in range(1, args.seed_episodes + 1):
@@ -216,54 +216,10 @@ for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total
   print("A2", loss_info)
   run.log(dict(map(lambda i,j : ("env_2/"+i, j) , log_labels[:-1], loss_info)), step=episode)
 
-  def reconstruction_loss(recon_x, x):
-    return F.mse_loss(recon_x, x, reduction='mean')
+  # CVAE training
+  cvae_losses = cvae.update_parameters(200, agent, agent_2, D, D_2, optimizer, args, episode)
+  print("CVAE: ", cvae_losses)
 
-  def kl_divergence(mu, logvar):
-    return -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
-
-  def cycle_consistency_loss(x, recon_x_from_y, y, recon_y_from_x):
-    loss_X_to_Y_to_X = F.mse_loss(recon_x_from_y, x, reduction='mean')
-    loss_Y_to_X_to_Y = F.mse_loss(recon_y_from_x, y, reduction='mean')
-    return loss_X_to_Y_to_X + loss_Y_to_X_to_Y
-
-  total_loss = 0
-  for i in tqdm(range(100)):
-    observations, a_1, _, _ = D.sample(1, 1)
-    observations_2, a_2, _, _ = D_2.sample(1, 1)
-  
-    x_1 = agent.encoder(observations[0]).detach()
-    x_2 = agent_2.encoder(observations_2[0]).detach()
-    cvae.train()
-    optimizer.zero_grad()
-
-    recon_1, recon_2, recon_1_from_2, recon_2_from_1 = cvae(x_1, x_2)
-
-    with torch.no_grad():
-      belief, _, _, _, posterior_state, _, _ = agent.transition_model(
-            torch.zeros(1, 1, device=args.device),
-            a_1,
-            torch.zeros(1, 1, device=args.device),
-            recon_1.unsqueeze(dim=0))
-
-      belief, posterior_state = belief.squeeze(dim=0), posterior_state.squeeze(dim=0)
-
-    recon_loss_1 = reconstruction_loss(recon_1, x_1)
-    recon_loss_2 = reconstruction_loss(recon_2, x_2)
-    # kl_loss_1 = kl_divergence(mu_1, logvar_1)
-    # kl_loss_2 = kl_divergence(mu_2, logvar_2)
-    cycle_loss = cycle_consistency_loss(x_1, recon_1_from_2, x_2, recon_2_from_1)
-
-    loss = (1.0 * (recon_loss_1 + recon_loss_2) +
-                  # 0.01 * (kl_loss_1 + kl_loss_2) +
-                  5.0 * cycle_loss)
-
-    loss.backward()
-    optimizer.step()
-    total_loss += np.array([recon_loss_1.item(), recon_loss_2.item(), cycle_loss.item()])
-
-  print(total_loss)
-            
   # Data collection
   with torch.no_grad():
     observation, total_reward = env.reset(), 0
@@ -308,13 +264,13 @@ for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total
     pbar = tqdm(range(args.max_episode_length // args.second_action_repeat), leave=False, position=0)
     for t in pbar:
       # maintain belief and posterior_state
-      belief, posterior_state = agent_2.infer_state(observation.to(device=args.device), action, belief, posterior_state)
-      action = agent_2.select_action((belief, posterior_state), deterministic=False)
-      # action = env_2.sample_random_action()
+      # belief, posterior_state = agent_2.infer_state(observation.to(device=args.device), action, belief, posterior_state)
+      # action = agent_2.select_action((belief, posterior_state), deterministic=False)
+      action = env_2.sample_random_action()
 
       # interact with env
-      next_observation, reward, done = env_2.step(action.cpu() if isinstance(env, EnvBatcher) else action[0].cpu())  # Perform environment step (action repeats handled internally)
-      # next_observation, reward, done = env_2.step(action)  # Perform environment step (action repeats handled internally)
+      # next_observation, reward, done = env_2.step(action.cpu() if isinstance(env, EnvBatcher) else action[0].cpu())  # Perform environment step (action repeats handled internally)
+      next_observation, reward, done = env_2.step(action)  # Perform environment step (action repeats handled internally)
       D_2.append(next_observation, action.cpu(), reward, done)
       total_reward += reward
       done += done
@@ -339,7 +295,7 @@ for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total
     # Initialise parallelised test environments
     test_envs = EnvBatcher(
       Env,
-      (args.env, args.symbolic, args.seed, args.max_episode_length, args.action_repeat, args.bit_depth),
+      (args.env, args.symbolic, args.seed, args.max_episode_length, args.action_repeat, args.bit_depth, 1),
       {},
       args.test_episodes)
 
@@ -355,11 +311,11 @@ for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total
       for t in tqdm(range(args.max_episode_length // args.action_repeat), leave=False, position=0):
         # belief, posterior_state = agent.infer_state(observation.to(device=args.device), action, belief, posterior_state)
         observation_ = observation.to(device=args.device)
-        x = agent.encoder(observation_)
-        z_ = cvae.encoder_1(x)
-        x = cvae.decoder_2(z_)
+        x = agent_2.encoder(observation_)
+        z_ = cvae.encoder_2(x)
+        x = cvae.decoder_1(z_)
 
-        belief, _, _, _, posterior_state, _, _ = agent_2.transition_model(
+        belief, _, _, _, posterior_state, _, _ = agent.transition_model(
             posterior_state,
             action.unsqueeze(dim=0),
             belief,
@@ -368,7 +324,7 @@ for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total
         belief, posterior_state = belief.squeeze(dim=0), posterior_state.squeeze(
             dim=0)  # Remove time dimension from belief/state
 
-        action = agent_2.select_action((belief, posterior_state), deterministic=True)
+        action = agent.select_action((belief, posterior_state), deterministic=True)
         # interact with env
         next_observation, reward, done = test_envs.step(action.cpu() if isinstance(test_envs, EnvBatcher) else action[
           0].cpu())  # Perform environment step (action repeats handled internally)
@@ -376,7 +332,7 @@ for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total
 
         if not args.symbolic:  # Collect real vs. predicted frames for video
           video_frames.append(
-            make_grid(torch.cat([observation, agent_2.observation_model(belief, posterior_state).cpu()], dim=3) + 0.5,
+            make_grid(torch.cat([observation, agent.observation_model(belief, posterior_state).cpu()], dim=3) + 0.5,
                       nrow=5).numpy())  # Decentre
         observation = next_observation
         if done.sum().item() == args.test_episodes:
