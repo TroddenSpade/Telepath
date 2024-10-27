@@ -119,7 +119,6 @@ D_2 = ExperienceReplay(args.experience_size, args.symbolic, env.observation_size
 
 # Instantiate model and optimizer
 cvae = CycleVAE(args.embedding_size, 512).to(args.device)
-optimizer = torch.optim.Adam(cvae.parameters(), lr=2e-4)
 
 # Initialise dataset D with S random seed episodes
 for s in range(1, args.seed_episodes + 1):
@@ -217,7 +216,7 @@ for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total
   run.log(dict(map(lambda i,j : ("env_2/"+i, j) , log_labels[:-1], loss_info)), step=episode)
 
   # CVAE training
-  cvae_losses = cvae.update_parameters(200, agent, agent_2, D, D_2, optimizer, args, episode)
+  cvae_losses = cvae.update_parameters(200, agent, agent_2, D, D_2, args, episode)
   print("CVAE: ", cvae_losses)
 
   # Data collection

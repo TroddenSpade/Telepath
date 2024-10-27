@@ -15,31 +15,31 @@ def weights_init_normal(m):
         torch.nn.init.constant_(m.bias.data, 0.0)
 
 
-# class Discriminator(nn.Module):
-#     def __init__(self, input_shape):
-#         super(Discriminator, self).__init__()
-#         channels, height, width = input_shape
-#         # Calculate output of image discriminator (PatchGAN)
-#         self.output_shape = (1, height // 2 ** 4, width // 2 ** 4)
+class Discriminator(nn.Module):
+    def __init__(self, input_shape):
+        super(Discriminator, self).__init__()
+        channels, height, width = input_shape
+        # Calculate output of image discriminator (PatchGAN)
+        self.output_shape = (1, height // 2 ** 4, width // 2 ** 4)
 
-#         def discriminator_block(in_filters, out_filters, normalize=True):
-#             """Returns downsampling layers of each discriminator block"""
-#             layers = [nn.Conv2d(in_filters, out_filters, 4, stride=2, padding=1)]
-#             if normalize:
-#                 layers.append(nn.InstanceNorm2d(out_filters))
-#             layers.append(nn.LeakyReLU(0.2, inplace=True))
-#             return layers
+        def discriminator_block(in_filters, out_filters, normalize=True):
+            """Returns downsampling layers of each discriminator block"""
+            layers = [nn.Conv2d(in_filters, out_filters, 4, stride=2, padding=1)]
+            if normalize:
+                layers.append(nn.InstanceNorm2d(out_filters)) # type: ignore
+            layers.append(nn.LeakyReLU(0.2, inplace=True)) # type: ignore
+            return layers
 
-#         self.model = nn.Sequential(
-#             *discriminator_block(channels, 64, normalize=False),
-#             *discriminator_block(64, 128),
-#             *discriminator_block(128, 256),
-#             *discriminator_block(256, 512),
-#             nn.Conv2d(512, 1, 3, padding=1)
-#         )
+        self.model = nn.Sequential(
+            *discriminator_block(channels, 64, normalize=False),
+            *discriminator_block(64, 128),
+            *discriminator_block(128, 256),
+            *discriminator_block(256, 512),
+            nn.Conv2d(512, 1, 3, padding=1)
+        )
 
-#     def forward(self, img):
-#         return self.model(img)
+    def forward(self, img):
+        return self.model(img)
 
 class CycleVAE(nn.Module):
     def __init__(self, input_size, latent_size):
@@ -70,20 +70,36 @@ class CycleVAE(nn.Module):
             nn.Linear(1024, input_size)
         )
 
+        self.D1 = Discriminator((3, 64, 64))
+        self.D2 = Discriminator((3, 64, 64))
+
         self.apply(weights_init_normal)
 
+        self.optimizer_G = torch.optim.Adam(
+            list(self.encoder_1.parameters()) + 
+            list(self.encoder_2.parameters()) + 
+            list(self.decoder_1.parameters()) + 
+            list(self.decoder_2.parameters()), # type: ignore
+            lr=0.0001,
+            betas=(0.5, 0.999),
+        )
+        self.optimizer_D1 = torch.optim.Adam(self.D1.parameters(), lr=0.0001, betas=(0.5, 0.999))
+        self.optimizer_D2 = torch.optim.Adam(self.D2.parameters(), lr=0.0001, betas=(0.5, 0.999))
 
-    def reparameterize(self, mu, logvar):
-        std = torch.exp(0.5*logvar)
-        eps = torch.randn_like(std)
-        return mu + eps * std
+        # Losses
+        self.criterion_GAN = torch.nn.MSELoss()
+        self.criterion_pixel = torch.nn.L1Loss()
+
+
+    def reparameterize(self, mu):
+        std = torch.randn_like(mu)
+        return mu + std
 
 
     def forward(self, args, agent, agent_2, a_1, a_2, observations, observations_2):
         x_1 = agent.encoder(observations)
-        z_1 = self.encoder_1(x_1)
-        # mu_1, logvar_1 = self.fc_mu_1(h_1), self.fc_logvar_1(h_1)
-        # z_1 = self.reparameterize(mu_1, logvar_1)
+        mu_1 = self.encoder_1(x_1)
+        z_1 = self.reparameterize(mu_1)
         recon_1 = self.decoder_1(z_1)
         belief, _, _, _, posterior_state, _, _ = agent.transition_model(
           torch.zeros(1, args.state_size, device=args.device),
@@ -94,9 +110,8 @@ class CycleVAE(nn.Module):
         reconst_observation = agent.observation_model(belief, posterior_state)
 
         x_2 = agent_2.encoder(observations_2)
-        z_2 = self.encoder_2(x_2)
-        # mu_2, logvar_2 = self.fc_mu_2(h_2), self.fc_logvar_2(h_2)
-        # z_2 = self.reparameterize(mu_2, logvar_2)
+        mu_2 = self.encoder_2(x_2)
+        z_2 = self.reparameterize(mu_2)
         recon_2 = self.decoder_2(z_2)
         belief, _, _, _, posterior_state, _, _ = agent_2.transition_model(
             torch.zeros(1, args.state_size, device=args.device),
@@ -115,7 +130,8 @@ class CycleVAE(nn.Module):
         belief, posterior_state = belief.squeeze(dim=0), posterior_state.squeeze(dim=0)
         reconst_2_from_1 = agent_2.observation_model(belief, posterior_state)
         recon_2_from_1_ = agent_2.encoder(reconst_2_from_1)
-        z_2_ = self.encoder_2(recon_2_from_1_)
+        mu_2_ = self.encoder_2(recon_2_from_1_)
+        z_2_ = self.reparameterize(mu_2_)
         recon_2_from_1 = self.decoder_1(z_2_)
         belief, _, _, _, posterior_state, _, _ = agent.transition_model(
             torch.zeros(1, args.state_size, device=args.device),
@@ -134,7 +150,8 @@ class CycleVAE(nn.Module):
         belief, posterior_state = belief.squeeze(dim=0), posterior_state.squeeze(dim=0)
         reconst_1_from_2 = agent.observation_model(belief, posterior_state)
         recon_1_from_2_ = agent.encoder(reconst_1_from_2)
-        z_1_ = self.encoder_1(recon_1_from_2_)
+        mu_1_ = self.encoder_1(recon_1_from_2_)
+        z_1_ = self.reparameterize(mu_1_)
         recon_1_from_2 = self.decoder_2(z_1_)
         belief, _, _, _, posterior_state, _, _ = agent_2.transition_model(
             torch.zeros(1, args.state_size, device=args.device),
@@ -144,7 +161,13 @@ class CycleVAE(nn.Module):
         belief, posterior_state = belief.squeeze(dim=0), posterior_state.squeeze(dim=0)
         reconst_observation_2_from_1 = agent_2.observation_model(belief, posterior_state)
         
-        return reconst_observation, reconst_observation_2, reconst_observation_1_from_2, reconst_observation_2_from_1
+        return reconst_observation, reconst_observation_2, reconst_observation_1_from_2, reconst_observation_2_from_1, mu_1, mu_2, mu_1_, mu_2_
+    
+    @staticmethod
+    def compute_kl(mu):
+        mu_2 = torch.pow(mu, 2)
+        loss = torch.mean(mu_2)
+        return loss
 
     @staticmethod
     def reconstruction_loss(recon_x, x):
@@ -164,7 +187,20 @@ class CycleVAE(nn.Module):
         return loss_X_to_Y_to_X + loss_Y_to_X_to_Y
 
 
-    def update_parameters(self, epochs, agent, agent_2, D, D_2, optimizer, args, episode):
+    def update_parameters(self, epochs, agent, agent_2, D, D_2, args, episode):
+        batch_size = 1
+
+        # Loss weights
+        lambda_0 = 10  # GAN
+        lambda_1 = 0.1  # KL (encoded images)
+        lambda_2 = 100  # ID pixel-wise
+        lambda_3 = 0.1  # KL (encoded translated images)
+        lambda_4 = 100  # Cycle pixel-wise
+
+        # Adversarial ground truths
+        valid = torch.ones((batch_size, *self.D1.output_shape), requires_grad=False, device=args.device)
+        fake = torch.zeros((batch_size, *self.D1.output_shape), requires_grad=False, device=args.device)
+
         total_loss = 0
         # Freeze the first and third models
         for param in agent.transition_model.parameters():
@@ -183,22 +219,58 @@ class CycleVAE(nn.Module):
 
         self.train()
         for i in tqdm(range(epochs)):
-            observations, a_1, _, _ = D.sample(1, 1)
-            observations_2, a_2, _, _ = D_2.sample(1, 1)
+            observations, a_1, _, _ = D.sample(batch_size, 1)
+            observations_2, a_2, _, _ = D_2.sample(batch_size, 1)
+
+            self.optimizer_G.zero_grad()
         
-            reconst_observation, reconst_observation_2, reconst_observation_1_from_2, reconst_observation_2_from_1 = self.forward(
-            args, agent, agent_2, a_1, a_2, observations[0], observations_2[0])
+            reconst_observation, reconst_observation_2, \
+            reconst_observation_1_from_2, reconst_observation_2_from_1, \
+            mu_1, mu_2, mu_1_, mu_2_ = self.forward(args, agent, agent_2, a_1, a_2, observations[0], observations_2[0])
 
-            recon_loss_1 = CycleVAE.reconstruction_loss(observations[0], reconst_observation)
-            recon_loss_2 = CycleVAE.reconstruction_loss(observations_2[0], reconst_observation_2)
-            # kl_loss_1 = kl_divergence(mu_1, logvar_1)
-            # kl_loss_2 = kl_divergence(mu_2, logvar_2)
-            cycle_loss = CycleVAE.cycle_consistency_loss(observations[0], reconst_observation_1_from_2, observations_2[0], reconst_observation_2_from_1)
+            loss_GAN_1 = lambda_0 * self.criterion_GAN(self.D1(reconst_observation_1_from_2), valid)
+            loss_GAN_2 = lambda_0 * self.criterion_GAN(self.D2(reconst_observation_2_from_1), valid)
+            loss_KL_1 = lambda_1 * self.compute_kl(mu_1)
+            loss_KL_2 = lambda_1 * self.compute_kl(mu_2)
+            loss_ID_1 = lambda_2 * self.criterion_pixel(observations[0], reconst_observation)
+            loss_ID_2 = lambda_2 * self.criterion_pixel(observations_2[0], reconst_observation_2)
+            loss_KL_1_ = lambda_3 * self.compute_kl(mu_1_)
+            loss_KL_2_ = lambda_3 * self.compute_kl(mu_2_)
+            loss_cyc_1 = lambda_4 * self.criterion_pixel(observations[0], reconst_observation_1_from_2)
+            loss_cyc_2 = lambda_4 * self.criterion_pixel(observations_2[0], reconst_observation_2_from_1)
 
-            loss = (1.0 * (recon_loss_1 + recon_loss_2) +
-                        # 0.01 * (kl_loss_1 + kl_loss_2) +
-                        5.0 * cycle_loss)
+            # Total loss
+            loss_G = (
+                loss_KL_1
+                + loss_KL_2
+                + loss_ID_1
+                + loss_ID_2
+                + loss_GAN_1
+                + loss_GAN_2
+                + loss_KL_1_
+                + loss_KL_2_
+                + loss_cyc_1
+                + loss_cyc_2
+            )
+
+            loss_G.backward()
+            self.optimizer_G.step()
+            total_loss += np.array([loss_KL_1.item(), loss_KL_2.item(), loss_ID_1.item(), loss_ID_2.item(), loss_KL_1_.item(), loss_KL_2_.item(), loss_cyc_1.item(), loss_cyc_2.item()])
             
+            self.optimizer_D1.zero_grad()
+            loss_D1 = self.criterion_GAN(self.D1(observations[0]), valid) + self.criterion_GAN(self.D1(reconst_observation_1_from_2.detach()), fake)
+            loss_D1.backward()
+            self.optimizer_D1.step()
+
+            # -----------------------
+            #  Train Discriminator 2
+            # -----------------------
+
+            self.optimizer_D2.zero_grad()
+            loss_D2 = self.criterion_GAN(self.D2(observations_2[0]), valid) + self.criterion_GAN(self.D2(reconst_observation_2_from_1.detach()), fake)
+            loss_D2.backward()
+            self.optimizer_D2.step()
+
             if i % 100 == 99:
                 fig, ax = plt.subplots(2, 2, figsize=(2, 2))
                 ax[0,0].imshow(observations[0, 0].permute(1, 2, 0).detach().cpu().numpy()+0.5)
@@ -207,11 +279,6 @@ class CycleVAE(nn.Module):
                 ax[1,1].imshow(reconst_observation_2[0].permute(1, 2, 0).detach().cpu().numpy()+0.5)
                 fig.savefig('./results/RRR' + str(episode) + ".png")
                 plt.close()
-
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            total_loss += np.array([recon_loss_1.item(), recon_loss_2.item(), cycle_loss.item()])
 
         for param in agent.transition_model.parameters():
             param.requires_grad = True
