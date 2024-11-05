@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torchvision import transforms
+from PIL import Image
 import numpy as np
 import matplotlib.pyplot as plt
 from tqdm import tqdm
@@ -13,6 +15,26 @@ def weights_init_normal(m):
     elif classname.find("BatchNorm2d") != -1:
         torch.nn.init.normal_(m.weight.data, 1.0, 0.02)
         torch.nn.init.constant_(m.bias.data, 0.0)
+
+
+class Transfroms(torch.nn.Module):
+    def __init__(self, shape):
+        super(Transfroms, self).__init__()
+        assert len(shape) == 3
+        transforms_ = [
+            transforms.Resize([int(shape[1] * 1.12), int(shape[2] * 1.12)], Image.BICUBIC, antialias=True),
+            transforms.RandomCrop((shape[1], shape[2])),
+            # transforms.RandomHorizontalFlip(),
+        ]
+        self.transforms = torch.nn.Sequential(*transforms_)
+        # self.normalizer = torch.nn.Sequential(transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)))
+
+    def forward(self, x):
+        x = self.transforms(x)
+        # max_, min_ = torch.amax(x), torch.amin(x)
+        # x = (x - min_) / (max_ - min_ + 1e-7)
+        # return self.normalizer(x)
+        return x
 
 
 class Discriminator(nn.Module):
@@ -44,6 +66,9 @@ class Discriminator(nn.Module):
 class CycleVAE(nn.Module):
     def __init__(self, input_size, latent_size):
         super().__init__()
+
+        self.transformer = Transfroms((3, 64, 64))
+
         self.encoder_1 = nn.Sequential(
             nn.Linear(input_size, 1024),
             nn.ReLU(),
@@ -88,7 +113,7 @@ class CycleVAE(nn.Module):
 
         # Losses
         self.criterion_GAN = torch.nn.MSELoss()
-        self.criterion_pixel = torch.nn.L1Loss()
+        self.criterion_pixel = torch.nn.L1Loss(reduction='sum')
 
 
     def reparameterize(self, mu):
@@ -161,7 +186,7 @@ class CycleVAE(nn.Module):
         belief, posterior_state = belief.squeeze(dim=0), posterior_state.squeeze(dim=0)
         reconst_observation_2_from_1 = agent_2.observation_model(belief, posterior_state)
         
-        return reconst_observation, reconst_observation_2, reconst_observation_1_from_2, reconst_observation_2_from_1, mu_1, mu_2, mu_1_, mu_2_
+        return reconst_observation, reconst_observation_2, reconst_observation_1_from_2, reconst_observation_2_from_1, mu_1, mu_2, mu_1_, mu_2_, reconst_2_from_1, reconst_1_from_2
     
     @staticmethod
     def compute_kl(mu):
@@ -193,9 +218,9 @@ class CycleVAE(nn.Module):
         # Loss weights
         lambda_0 = 10  # GAN
         lambda_1 = 0.1  # KL (encoded images)
-        lambda_2 = 100  # ID pixel-wise
+        lambda_2 = 1  # ID pixel-wise
         lambda_3 = 0.1  # KL (encoded translated images)
-        lambda_4 = 100  # Cycle pixel-wise
+        lambda_4 = 1  # Cycle pixel-wise
 
         # Adversarial ground truths
         valid = torch.ones((batch_size, *self.D1.output_shape), requires_grad=False, device=args.device)
@@ -222,11 +247,15 @@ class CycleVAE(nn.Module):
             observations, a_1, _, _ = D.sample(batch_size, 1)
             observations_2, a_2, _, _ = D_2.sample(batch_size, 1)
 
+            observations = self.transformer(observations[0])
+            observations_2 = self.transformer(observations_2[0])
+
             self.optimizer_G.zero_grad()
         
             reconst_observation, reconst_observation_2, \
             reconst_observation_1_from_2, reconst_observation_2_from_1, \
-            mu_1, mu_2, mu_1_, mu_2_ = self.forward(args, agent, agent_2, a_1, a_2, observations[0], observations_2[0])
+            mu_1, mu_2, mu_1_, mu_2_, \
+            reconst_2_from_1, reconst_1_from_2= self.forward(args, agent, agent_2, a_1, a_2, observations, observations_2)
 
             loss_GAN_1 = lambda_0 * self.criterion_GAN(self.D1(reconst_observation_1_from_2), valid)
             loss_GAN_2 = lambda_0 * self.criterion_GAN(self.D2(reconst_observation_2_from_1), valid)
@@ -255,10 +284,15 @@ class CycleVAE(nn.Module):
 
             loss_G.backward()
             self.optimizer_G.step()
-            total_loss += np.array([loss_KL_1.item(), loss_KL_2.item(), loss_ID_1.item(), loss_ID_2.item(), loss_KL_1_.item(), loss_KL_2_.item(), loss_cyc_1.item(), loss_cyc_2.item()])
+            total_loss += np.array([
+                loss_GAN_1.item(), loss_GAN_2.item(),
+                loss_KL_1.item(), loss_KL_2.item(), 
+                loss_ID_1.item(), loss_ID_2.item(),
+                loss_KL_1_.item(), loss_KL_2_.item(), 
+                loss_cyc_1.item(), loss_cyc_2.item()])
             
             self.optimizer_D1.zero_grad()
-            loss_D1 = self.criterion_GAN(self.D1(observations[0]), valid) + self.criterion_GAN(self.D1(reconst_observation_1_from_2.detach()), fake)
+            loss_D1 = self.criterion_GAN(self.D1(observations), valid) + self.criterion_GAN(self.D1(reconst_1_from_2.detach()), fake)
             loss_D1.backward()
             self.optimizer_D1.step()
 
@@ -267,16 +301,25 @@ class CycleVAE(nn.Module):
             # -----------------------
 
             self.optimizer_D2.zero_grad()
-            loss_D2 = self.criterion_GAN(self.D2(observations_2[0]), valid) + self.criterion_GAN(self.D2(reconst_observation_2_from_1.detach()), fake)
+            loss_D2 = self.criterion_GAN(self.D2(observations_2), valid) + self.criterion_GAN(self.D2(reconst_2_from_1.detach()), fake)
             loss_D2.backward()
             self.optimizer_D2.step()
 
             if i % 100 == 99:
-                fig, ax = plt.subplots(2, 2, figsize=(2, 2))
-                ax[0,0].imshow(observations[0, 0].permute(1, 2, 0).detach().cpu().numpy()+0.5)
+                fig, ax = plt.subplots(4, 3, figsize=(3, 3))
+                ax[0,0].imshow(observations[0].permute(1, 2, 0).detach().cpu().numpy()+0.5)
                 ax[0,1].imshow(reconst_observation[0].permute(1, 2, 0).detach().cpu().numpy()+0.5)
-                ax[1,0].imshow(observations_2[0, 0].permute(1, 2, 0).detach().cpu().numpy()+0.5)
-                ax[1,1].imshow(reconst_observation_2[0].permute(1, 2, 0).detach().cpu().numpy()+0.5)
+                
+                ax[1,0].imshow(observations[0].permute(1, 2, 0).detach().cpu().numpy()+0.5)
+                ax[1,1].imshow(reconst_2_from_1[0].permute(1, 2, 0).detach().cpu().numpy()+0.5)
+                ax[1,2].imshow(reconst_observation_1_from_2[0].permute(1, 2, 0).detach().cpu().numpy()+0.5)
+
+                ax[2,0].imshow(observations_2[0].permute(1, 2, 0).detach().cpu().numpy()+0.5)
+                ax[2,1].imshow(reconst_observation_2[0].permute(1, 2, 0).detach().cpu().numpy()+0.5)
+
+                ax[3,0].imshow(observations_2[0].permute(1, 2, 0).detach().cpu().numpy()+0.5)
+                ax[3,1].imshow(reconst_1_from_2[0].permute(1, 2, 0).detach().cpu().numpy()+0.5)
+                ax[3,2].imshow(reconst_observation_2_from_1[0].permute(1, 2, 0).detach().cpu().numpy()+0.5)
                 fig.savefig('./results/RRR' + str(episode) + ".png")
                 plt.close()
 

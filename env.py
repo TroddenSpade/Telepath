@@ -77,6 +77,11 @@ class ControlSuiteEnv():
                 self._env.physics.render(camera_id=self.camera_id), self.bit_depth)
         return observation, reward, done
 
+    def get_observation(self, camera_id):
+        observation = _images_to_observation(
+                self._env.physics.render(camera_id=camera_id), self.bit_depth)
+        return observation
+
     def render(self):
         cv2.imshow('screen', self._env.physics.render(camera_id=self.camera_id)[:, :, ::-1])
         cv2.waitKey(1)
