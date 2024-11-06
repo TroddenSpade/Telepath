@@ -116,8 +116,6 @@ D = ExperienceReplay(args.experience_size, args.symbolic, env.observation_size, 
                      args.device)
 D_2 = ExperienceReplay(args.experience_size, args.symbolic, env.observation_size, env.action_size, args.bit_depth,
                       args.device)
-D_VAE = ExperienceReplay(args.experience_size, args.symbolic, env.observation_size, env.action_size, args.bit_depth,
-                      args.device)
 
 # Instantiate model and optimizer
 cvae = CycleVAE(args.embedding_size, 1024).to(args.device)
@@ -128,8 +126,7 @@ for s in range(1, args.seed_episodes + 1):
   while not done:
     action = env.sample_random_action()
     next_observation, reward, done = env.step(action)
-    D.append(next_observation, action.cpu(), reward, done)  # here use the next_observation
-    D_VAE.append(env.get_observation(1), action.cpu(), reward, done)
+    D.append(next_observation, action.cpu(), reward, done, env.get_observation(1))  # here use the next_observation
     observation = next_observation
     t += 1
   metrics['env_steps'].append(t * args.action_repeat + (0 if len(metrics['env_steps']) == 0 else metrics['env_steps'][-1]))
@@ -219,7 +216,7 @@ for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total
   run.log(dict(map(lambda i,j : ("env_2/"+i, j) , log_labels[:-1], loss_info)), step=episode)
 
   # CVAE training
-  cvae_losses = cvae.update_parameters(200, agent, agent_2, D, D_VAE, args, episode)
+  cvae_losses = cvae.update_parameters(200, agent, agent_2, D, args, episode)
   print("CVAE: ", cvae_losses)
 
   # Data collection
@@ -237,7 +234,7 @@ for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total
 
       # interact with env
       next_observation, reward, done = env.step(action.cpu() if isinstance(env, EnvBatcher) else action[0].cpu())  # Perform environment step (action repeats handled internally)
-      D.append(next_observation, action.cpu(), reward, done)
+      D.append(next_observation, action.cpu(), reward, done, env.get_observation(1))
       total_reward += reward
       observation = next_observation
 
@@ -297,7 +294,7 @@ for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total
     # Initialise parallelised test environments
     test_envs = EnvBatcher(
       Env,
-      (args.env, args.symbolic, args.seed, args.max_episode_length, args.action_repeat, args.bit_depth, 1),
+      (args.env, args.symbolic, args.seed, args.max_episode_length, args.action_repeat, args.bit_depth),
       {},
       args.test_episodes)
 
@@ -313,11 +310,9 @@ for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total
       for t in tqdm(range(args.max_episode_length // args.action_repeat), leave=False, position=0):
         # belief, posterior_state = agent.infer_state(observation.to(device=args.device), action, belief, posterior_state)
         observation_ = observation.to(device=args.device)
-        x = agent_2.encoder(observation_)
-        z_ = cvae.encoder_2(x)
-
-        x = cvae.decoder_1(z_)
-        x_ = cvae.decoder_2(z_)
+        x = agent.encoder(observation_)
+        z_ = cvae.encoder_1(x)
+        x_ = cvae.decoder_1(z_)
 
         belief_, _, _, _, posterior_state_, _, _ = agent_2.transition_model(
             torch.zeros(args.test_episodes, args.state_size, device=args.device),
