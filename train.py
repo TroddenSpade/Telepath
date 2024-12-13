@@ -7,7 +7,7 @@ import torch
 from torch.nn import functional as F
 from torchvision.utils import make_grid, save_image
 from tqdm import tqdm
-from env import CONTROL_SUITE_ENVS, Env, GYM_ENVS, EnvBatcher
+from env import CONTROL_SUITE_ENVS, Env, GYM_ENVS, EnvBatcher, RandomControlSuite
 from agent import Dreamer
 from memory import ExperienceReplay
 from modules.vae import CycleVAE
@@ -36,7 +36,7 @@ parser.add_argument('--belief-prior-len', type=int, default=8, metavar='I', help
 parser.add_argument('--target-horizon', type=int, default=10, metavar='T', help='target horizon')
 parser.add_argument('--source-len', type=int, default=5, metavar='S', help='source length')
 parser.add_argument('--delay-cem', type=int, default=0, metavar='D', help='delay cem')
-parser.add_argument('--expl-amount-2', type=float, default=0.3, help='exploration noise')
+parser.add_argument('--expl-amount-2', type=float, default=0.5, help='exploration noise')
 parser.add_argument('--second-agenr-lr-skip', type=int, default=5, metavar='S', help='second agent learning rate skip')
 parser.add_argument('--check-power-plugged', type=bool, default=True, metavar='C', help='check power plugged')
 parser.add_argument('--prior_belief_max_skip', type=int, default=3, metavar='S', help='prior belief max skip')
@@ -57,7 +57,7 @@ parser.add_argument('--learning-rate-schedule', type=int, default=0, metavar='α
 parser.add_argument('--adam-epsilon', type=float, default=1e-7, metavar='ε', help='Adam optimizer epsilon value') 
 # Note that original has a linear learning rate decay, but it seems unlikely that this makes a significant difference
 parser.add_argument('--grad-clip-norm', type=float, default=100.0, metavar='C', help='Gradient clipping norm')
-parser.add_argument('--expl-amount', type=float, default=0.3, help='exploration noise')
+parser.add_argument('--expl-amount', type=float, default=0.5, help='exploration noise')
 parser.add_argument('--planning-horizon', type=int, default=15, metavar='H', help='Planning horizon distance')
 parser.add_argument('--discount', type=float, default=0.99, metavar='H', help='Planning horizon distance')
 parser.add_argument('--disclam', type=float, default=0.95, metavar='H', help='discount rate to compute return')
@@ -103,6 +103,7 @@ summary_name = results_dir + "/{}_{}_log"
 # Initialise training environment and experience replay memory
 env = Env(args.env, args.symbolic, args.seed, args.max_episode_length, args.action_repeat, args.bit_depth)
 env_2 = Env(args.env, args.symbolic, args.seed, args.max_episode_length, args.second_action_repeat, args.bit_depth, camera_id=1)
+env_vae = RandomControlSuite(args.env, args.symbolic, args.seed, args.bit_depth, 0, 1)
 
 args.observation_size, args.action_size = env.observation_size, env.action_size
 args_2 = copy.deepcopy(args)
@@ -118,6 +119,8 @@ D_2 = ExperienceReplay(args.experience_size, args.symbolic, env.observation_size
                       args.device)
 D_VAE = ExperienceReplay(args.experience_size, args.symbolic, env.observation_size, env.action_size, args.bit_depth,
                       args.device)
+D_VAE_2 = ExperienceReplay(args.experience_size, args.symbolic, env.observation_size, env.action_size, args.bit_depth,
+                      args.device)
 
 # Instantiate model and optimizer
 cvae = CycleVAE(args.embedding_size, 1024).to(args.device)
@@ -129,7 +132,10 @@ for s in range(1, args.seed_episodes + 1):
     action = env.sample_random_action()
     next_observation, reward, done = env.step(action)
     D.append(next_observation, action.cpu(), reward, done)  # here use the next_observation
-    D_VAE.append(env.get_observation(1), action.cpu(), reward, done)
+    D_VAE.append(next_observation, action.cpu(), reward, done)
+    obs_1, obs_2 = env_vae.sample()
+    D_VAE.append(obs_1, torch.tensor(0), 0, False)
+    D_VAE_2.append(obs_2, torch.tensor(0), 0, False)
     observation = next_observation
     t += 1
   metrics['env_steps'].append(t * args.action_repeat + (0 if len(metrics['env_steps']) == 0 else metrics['env_steps'][-1]))
@@ -142,11 +148,11 @@ for s in range(1, args.seed_episodes + 1):
     action = env_2.sample_random_action()
     next_observation, reward, done = env_2.step(action)
     D_2.append(next_observation, action.cpu(), reward, done)  # here use the next_observation
+    D_VAE_2.append(next_observation, action.cpu(), reward, done)
     observation = next_observation
     t += 1
   print("(actor 2)(random)episodes: {}".format(s))
 
-print("--- Finish random data collection  --- ")
 
 if args.models and os.path.exists(args.models):
   model_dicts = torch.load(args.models)
@@ -219,7 +225,7 @@ for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total
   run.log(dict(map(lambda i,j : ("env_2/"+i, j) , log_labels[:-1], loss_info)), step=episode)
 
   # CVAE training
-  cvae_losses = cvae.update_parameters(200, agent, agent_2, D, D_VAE, args, episode)
+  cvae_losses = cvae.update_parameters(500, agent, agent_2, D_VAE, D_VAE_2, args, episode)
   print("CVAE: ", cvae_losses)
 
   # Data collection
@@ -238,6 +244,10 @@ for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total
       # interact with env
       next_observation, reward, done = env.step(action.cpu() if isinstance(env, EnvBatcher) else action[0].cpu())  # Perform environment step (action repeats handled internally)
       D.append(next_observation, action.cpu(), reward, done)
+      D_VAE.append(next_observation, action.cpu(), reward, done)
+      obs_1, obs_2 = env_vae.sample()
+      D_VAE.append(obs_1, torch.tensor(0), 0, False)
+      D_VAE_2.append(obs_2, torch.tensor(0), 0, False)
       total_reward += reward
       observation = next_observation
 
@@ -274,6 +284,7 @@ for episode in tqdm(range(metrics['episodes'][-1] + 1, args.episodes + 1), total
       # next_observation, reward, done = env_2.step(action.cpu() if isinstance(env, EnvBatcher) else action[0].cpu())  # Perform environment step (action repeats handled internally)
       next_observation, reward, done = env_2.step(action)  # Perform environment step (action repeats handled internally)
       D_2.append(next_observation, action.cpu(), reward, done)
+      D_VAE_2.append(next_observation, action.cpu(), reward, done)
       total_reward += reward
       done += done
 

@@ -197,3 +197,56 @@ class EnvBatcher():
 
     def close(self):
         [env.close() for env in self.envs]
+
+
+class RandomControlSuite():
+    def __init__(self, env, symbolic, seed, bit_depth, first_camera_id=0, second_camera_id=1):
+        from dm_control import suite
+        from dm_control.suite.wrappers import pixels
+        domain, task = env.split('-')
+        self.symbolic = symbolic
+        self._env = suite.load(
+            domain_name=domain, task_name=task, task_kwargs={'random': seed})
+        if not symbolic:
+            self._env = pixels.Wrapper(self._env)
+
+        self.bit_depth = bit_depth
+        self.first_camera_id = first_camera_id
+        self.second_camera_id = second_camera_id
+
+
+    def _generate_random_state(self):
+        time_step = self._env.reset()
+        qpos = np.array([
+            np.random.randn(),                         # Root x (unbounded)
+            np.random.uniform(0.0, 0.25),               # Root z (≥ 0, example upper bound for variety)
+            np.random.uniform(-np.pi, np.pi),          # Root rotation (-π to π)
+            np.random.uniform(-0.52, 1.05),            # Back thigh
+            np.random.uniform(-2.3, 0.3),              # Back shin
+            np.random.uniform(-0.5, 0.5),              # Back foot
+            np.random.uniform(-0.52, 1.05),            # Front thigh
+            np.random.uniform(-2.3, 0.3),              # Front shin
+            np.random.uniform(-0.5, 0.5)               # Front foot
+        ])
+        qvel = np.zeros((9))
+        # Use these to set the state
+        with self._env.physics.reset_context():
+            self._env.physics.data.qpos[:] = qpos
+            self._env.physics.data.qvel[:] = qvel
+
+
+    def sample(self):
+        self._generate_random_state()
+        observation_1 = _images_to_observation(
+            self._env.physics.render(camera_id=self.first_camera_id), self.bit_depth)
+        self._generate_random_state()
+        observation_2 = _images_to_observation(
+            self._env.physics.render(camera_id=self.first_camera_id), self.bit_depth)
+
+        return observation_1, observation_2
+
+
+    def get_observation(self, camera_id):
+        observation = _images_to_observation(
+                self._env.physics.render(camera_id=camera_id), self.bit_depth)
+        return observation
